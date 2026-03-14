@@ -1,5 +1,11 @@
 # Deploying the backend & using StackBlitz
 
+**Purpose:** Deploy the Geomapper backend so the frontend (e.g. StackBlitz) can call it. Aligned with **plan.md** (backend = Supabase Auth + Postgres + API; driver-locations batch, auth, config).
+
+**Last updated:** 2026-03-14
+
+---
+
 ## Deploy the backend
 
 The app is set up so the **frontend** can run anywhere (e.g. StackBlitz) and talk to a **deployed backend** via a configurable API base URL.
@@ -36,9 +42,11 @@ When the frontend is served from **another origin** (e.g. StackBlitz), set the A
    ```js
    window.GEOMAPPER_API_BASE = 'https://your-app.up.railway.app';
    ```
-4. The app will call `https://your-app.up.railway.app/api/config`, `/api/routes`, etc. CORS is allowed (`Access-Control-Allow-Origin: *`).
+4. The app will call `https://your-app.up.railway.app/api/config`, `/api/routes`, `/api/driver-locations/batch` (when using Supabase), etc. CORS is allowed (`Access-Control-Allow-Origin: *`).
 
 **Local dev:** Leave `window.GEOMAPPER_API_BASE = ''` so the frontend uses the same origin (your local server).
+
+For Supabase and auth setup, see [PHASE1_SETUP.md](PHASE1_SETUP.md). For architecture and phases, see [plan.md](plan.md).
 
 ## Push this repo to GitHub (first time)
 
@@ -53,8 +61,18 @@ No remote is set yet. Do this once:
    ```
 3. Replace `YOUR_USERNAME` and `YOUR_REPO_NAME` with your GitHub user and repo name.
 
-## GitHub + StackBlitz workflow
+## StackBlitz preview (live UI)
 
-1. After pushing, in StackBlitz: **Import from GitHub** → select the repo.
-2. Set `web/js/config.js` to your deployed backend URL (or keep `''` to use a local backend if you run one).
-3. As you develop, commit and push; you can open the same repo in StackBlitz to get the latest and monitor features.
+The repo includes a `package.json` so StackBlitz can run a dev server and show the app in the preview:
+
+1. **Import** the repo in StackBlitz (e.g. **Import from GitHub** → `AlexGuruz/gigatt-geomapper`).
+2. StackBlitz will run `npm install` and then `npm start`, which serves the `web/` folder on port 3000. The **Preview** panel should show the app (dispatcher map, or login if not authenticated).
+3. To use live data, set your deployed backend URL in `web/js/config.js`:  
+   `window.GEOMAPPER_API_BASE = 'https://your-backend.up.railway.app';`  
+   Leave it as `''` to only preview UI (API calls will fail until you point at a backend).
+
+## GitHub + StackBlitz workflow (commit per rollout)
+
+1. Develop and test locally; when ready, **commit** and **push** to `main` on GitHub.
+2. In StackBlitz, use **Sync** / **Pull** (or re-open the repo) to get the latest commit.
+3. Preview updates automatically so you can live-monitor UI and feature rollouts per commit.

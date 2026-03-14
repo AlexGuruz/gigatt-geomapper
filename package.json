@@ -1,0 +1,12 @@
+{
+  "name": "gigatt-geomapper",
+  "private": true,
+  "description": "GIGATT Geomapper – PilotCar Loads Map. Frontend runs in StackBlitz; point config at deployed backend.",
+  "scripts": {
+    "start": "serve web -l 3000",
+    "preview": "serve web -l 3000"
+  },
+  "devDependencies": {
+    "serve": "^14.2.4"
+  }
+}
