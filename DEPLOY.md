@@ -40,9 +40,21 @@ When the frontend is served from **another origin** (e.g. StackBlitz), set the A
 
 **Local dev:** Leave `window.GEOMAPPER_API_BASE = ''` so the frontend uses the same origin (your local server).
 
+## Push this repo to GitHub (first time)
+
+No remote is set yet. Do this once:
+
+1. **Create a new repository** on GitHub (e.g. `geomapper-app` or `gigatt-geomapper`). Do not add a README or .gitignore.
+2. In this project folder, run:
+   ```bash
+   git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
+   git branch -M main
+   git push -u origin main
+   ```
+3. Replace `YOUR_USERNAME` and `YOUR_REPO_NAME` with your GitHub user and repo name.
+
 ## GitHub + StackBlitz workflow
 
-1. Push this repo to GitHub.
-2. In StackBlitz: **Import from GitHub** → select the repo.
-3. Set `web/js/config.js` to your deployed backend URL (or keep `''` to use a local backend if you run one).
-4. As you develop, commit and push; you can open the same repo in StackBlitz to get the latest and monitor features.
+1. After pushing, in StackBlitz: **Import from GitHub** → select the repo.
+2. Set `web/js/config.js` to your deployed backend URL (or keep `''` to use a local backend if you run one).
+3. As you develop, commit and push; you can open the same repo in StackBlitz to get the latest and monitor features.
