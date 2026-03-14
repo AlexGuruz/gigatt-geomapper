@@ -1,9 +1,10 @@
 /**
  * API base URL for backend. Empty = same origin (local dev).
  * When the app is served by the same backend (e.g. local server.py), the backend
- * can provide apiBase via GET /api/config (from config.json or secrets e.g. Guru Config
- * "Backend URL" / backend_public_url / BACKEND_PUBLIC_URL), and the frontend will set
- * this automatically. For StackBlitz or any host that doesn't run the backend, set it here:
- *   window.GEOMAPPER_API_BASE = 'https://your-app.up.railway.app';
+ * can provide apiBase via GET /api/config. For StackBlitz: use the "Connect to backend"
+ * form on the login page (saved in localStorage) or set here / use app-config.json.
  */
-window.GEOMAPPER_API_BASE = '';
+(function() {
+  var saved = typeof localStorage !== 'undefined' && localStorage.getItem('geomapper_api_base');
+  window.GEOMAPPER_API_BASE = (saved && saved.trim()) ? saved.trim().replace(/\/$/, '') : '';
+})();

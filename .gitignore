@@ -1,4 +1,5 @@
 config.json
+web/app-config.json
 data/
 node_modules/
 __pycache__/

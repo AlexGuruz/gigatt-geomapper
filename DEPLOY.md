@@ -36,13 +36,10 @@ When the frontend is served from **another origin** (e.g. StackBlitz), set the A
 
 **In StackBlitz:**
 
-1. Open this repo in StackBlitz (e.g. **Open in StackBlitz** from GitHub).
-2. Edit `web/js/config.js`.
-3. Set `window.GEOMAPPER_API_BASE` to your deployed backend URL (no trailing slash), e.g.:
-   ```js
-   window.GEOMAPPER_API_BASE = 'https://your-app.up.railway.app';
-   ```
-4. The app will call `https://your-app.up.railway.app/api/config`, `/api/routes`, `/api/driver-locations/batch` (when using Supabase), etc. CORS is allowed (`Access-Control-Allow-Origin: *`).
+1. Open this repo in StackBlitz and run the app. The login page will show a **"Connect to backend"** section when the backend isn’t configured.
+2. Enter your deployed backend URL (e.g. `https://your-app.up.railway.app`) in the input and click **Connect & reload**. The URL is stored in `localStorage` and used for all `/api/*` requests.
+3. Alternatively, edit `web/js/config.js` and set `GEOMAPPER_API_BASE`, or add `web/app-config.json` (see `web/app-config.example.json`) with `supabaseUrl`, `supabaseAnonKey`, and `apiBase`.
+4. CORS is allowed (`Access-Control-Allow-Origin: *`) on the backend.
 
 **Local dev:** Leave `window.GEOMAPPER_API_BASE = ''` so the frontend uses the same origin (your local server).
 
@@ -67,10 +64,8 @@ The repo includes a `package.json` so StackBlitz can run a dev server and show t
 
 1. **Import** the repo in StackBlitz (e.g. **Import from GitHub** → `AlexGuruz/gigatt-geomapper`).
 2. StackBlitz runs `npm install` and `npm start`, which serves the `web/` folder on port 3000.
-3. **Auth-first flow:** The app is wrapped with Supabase auth. If the backend is not configured (or not reachable), the preview **shows the login page** and the message: *"Backend not configured. Set GEOMAPPER_API_BASE in web/js/config.js to your deployed backend URL."* The dispatcher map and route cards load **only after** a successful sign-in (dispatcher/admin role).
-4. To **demonstrate full features** (map, route cards, refresh, etc.), set your deployed backend URL in `web/js/config.js`:  
-   `window.GEOMAPPER_API_BASE = 'https://your-backend.up.railway.app';`  
-   Then sign in with a test dispatcher account; the map and sidebar will load and reflect backend data.
+3. **Auth-first flow:** The app is wrapped with Supabase auth. If the backend isn’t configured, the login page shows a **"Connect to backend"** form. Enter your deployed backend URL and click **Connect & reload**; the app then loads config from that backend and sign-in works. The dispatcher map loads only after sign-in (dispatcher/admin role).
+4. To **demonstrate full features** (map, route cards, refresh), use the Connect form with your deployed backend URL (or set it in `web/js/config.js` / `web/app-config.json`), then sign in with a test dispatcher account.
 
 ## GitHub + StackBlitz workflow (commit per rollout)
 

@@ -8,25 +8,38 @@
 
   function init() {
     var base = (typeof window !== 'undefined' && window.GEOMAPPER_API_BASE) ? window.GEOMAPPER_API_BASE : '';
-    return fetch(base + '/api/config')
-      .then(function(r) { return r.ok ? r.json() : {}; })
-      .catch(function() { return {}; })
-      .then(function(cfg) {
-        config.supabaseUrl = cfg.supabaseUrl || cfg.supabase_url || '';
-        config.supabaseAnonKey = cfg.supabaseAnonKey || cfg.supabase_anon_key || '';
-        if (cfg.apiBase && typeof window !== 'undefined') {
-          window.GEOMAPPER_API_BASE = String(cfg.apiBase).replace(/\/$/, '');
-        }
-        if (config.supabaseUrl && config.supabaseAnonKey) {
-          try {
-            if (window.supabase && window.supabase.createClient) {
-              supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
-            }
-          } catch (e) {
-            console.warn('Auth init failed:', e);
+    function applyCfg(cfg) {
+      if (!cfg) return false;
+      config.supabaseUrl = cfg.supabaseUrl || cfg.supabase_url || '';
+      config.supabaseAnonKey = cfg.supabaseAnonKey || cfg.supabase_anon_key || '';
+      if (cfg.apiBase && typeof window !== 'undefined') {
+        window.GEOMAPPER_API_BASE = String(cfg.apiBase).replace(/\/$/, '');
+      }
+      if (config.supabaseUrl && config.supabaseAnonKey) {
+        try {
+          if (window.supabase && window.supabase.createClient) {
+            supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
           }
+        } catch (e) {
+          console.warn('Auth init failed:', e);
         }
-        return !!supabase;
+      }
+      return !!supabase;
+    }
+    return fetch(base + '/api/config')
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .catch(function() { return null; })
+      .then(function(cfg) {
+        if (applyCfg(cfg)) return true;
+        if (!base) {
+          return fetch('/app-config.json')
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .catch(function() { return null; })
+            .then(function(appCfg) {
+              return !!applyCfg(appCfg);
+            });
+        }
+        return false;
       });
   }
 

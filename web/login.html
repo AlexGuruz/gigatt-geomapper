@@ -17,6 +17,11 @@
     .login-container button:hover { background: var(--accent-hover); }
     .login-container button:disabled { opacity: 0.6; cursor: not-allowed; }
     .login-error { color: #f85149; font-size: 0.85rem; margin-top: 0.5rem; }
+    .backend-connect { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
+    .backend-connect label { display: block; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.25rem; }
+    .backend-connect input { width: 100%; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; background: var(--bg-dark); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-family: inherit; font-size: 0.9rem; }
+    .backend-connect button { padding: 0.5rem 1rem; background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-family: inherit; }
+    .backend-connect button:hover { background: var(--border); }
   </style>
 </head>
 <body>
@@ -30,6 +35,11 @@
       <button type="submit" id="submitBtn">Sign in</button>
       <div id="loginError" class="login-error" style="display: none;"></div>
     </form>
+    <div id="backendConnect" class="backend-connect" style="display: none;">
+      <label for="backendUrl">Connect to backend (e.g. StackBlitz)</label>
+      <input type="url" id="backendUrl" placeholder="https://your-app.up.railway.app" autocomplete="off">
+      <button type="button" id="backendConnectBtn">Connect & reload</button>
+    </div>
   </div>
   <script src="js/config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -75,8 +85,30 @@
                 });
             });
           } else {
-            errEl.textContent = 'Backend not configured. Set GEOMAPPER_API_BASE in web/js/config.js to your deployed backend URL (e.g. StackBlitz or Railway).';
-            errEl.style.display = 'block';
+            var connectEl = document.getElementById('backendConnect');
+            var urlInput = document.getElementById('backendUrl');
+            var connectBtn = document.getElementById('backendConnectBtn');
+            if (connectEl) connectEl.style.display = 'block';
+            if (connectBtn && urlInput) {
+              connectBtn.addEventListener('click', function() {
+                var url = (urlInput.value || '').trim().replace(/\/$/, '');
+                if (!url) return;
+                try {
+                  new URL(url);
+                } catch (e) {
+                  errEl.textContent = 'Enter a valid URL (e.g. https://your-app.up.railway.app)';
+                  errEl.style.display = 'block';
+                  return;
+                }
+                try {
+                  localStorage.setItem('geomapper_api_base', url);
+                  window.location.reload();
+                } catch (e) {
+                  errEl.textContent = 'Could not save; try setting web/js/config.js manually.';
+                  errEl.style.display = 'block';
+                }
+              });
+            }
           }
         }
       });
