@@ -112,6 +112,7 @@ def load_into_env() -> bool:
     url = _get(guru, pass_data, "Project URL", "project_url", "supabase_url", "SUPABASE_URL")
     anon = _get(guru, pass_data, "anon public key", "anon_public_key", "anon_key", "supabase_anon_key", "SUPABASE_ANON_KEY")
     svc = _get(guru, pass_data, "service_role key", "service_role_key", "service_role", "SUPABASE_SERVICE_KEY")
+    backend_url = _get(guru, pass_data, "Backend URL", "backend_public_url", "api_base", "BACKEND_PUBLIC_URL")
 
     if url and not os.environ.get("SUPABASE_URL"):
         os.environ["SUPABASE_URL"] = url
@@ -119,6 +120,8 @@ def load_into_env() -> bool:
         os.environ["SUPABASE_ANON_KEY"] = anon
     if svc and not os.environ.get("SUPABASE_SERVICE_KEY"):
         os.environ["SUPABASE_SERVICE_KEY"] = svc
+    if backend_url and not os.environ.get("BACKEND_PUBLIC_URL"):
+        os.environ["BACKEND_PUBLIC_URL"] = backend_url.rstrip("/")
 
     _loaded = True
     return bool(url and svc)

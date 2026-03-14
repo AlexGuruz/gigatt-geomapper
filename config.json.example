@@ -13,5 +13,7 @@
   "allowed_senders": ["team@pilotcarloads.com"],
 
   "supabase_url": "https://YOUR_PROJECT.supabase.co",
-  "supabase_anon_key": "YOUR_ANON_KEY"
+  "supabase_anon_key": "YOUR_ANON_KEY",
+
+  "backend_public_url": "http://localhost:8080"
 }

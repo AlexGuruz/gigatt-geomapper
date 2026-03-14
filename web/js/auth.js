@@ -14,6 +14,9 @@
       .then(function(cfg) {
         config.supabaseUrl = cfg.supabaseUrl || cfg.supabase_url || '';
         config.supabaseAnonKey = cfg.supabaseAnonKey || cfg.supabase_anon_key || '';
+        if (cfg.apiBase && typeof window !== 'undefined') {
+          window.GEOMAPPER_API_BASE = String(cfg.apiBase).replace(/\/$/, '');
+        }
         if (config.supabaseUrl && config.supabaseAnonKey) {
           try {
             if (window.supabase && window.supabase.createClient) {

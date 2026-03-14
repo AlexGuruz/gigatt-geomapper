@@ -130,6 +130,12 @@ def load_config():
     if not raw.get("supabaseAnonKey") and raw.get("supabase_anon_key"):
         raw = dict(raw)
         raw["supabaseAnonKey"] = raw["supabase_anon_key"]
+    if os.environ.get("BACKEND_PUBLIC_URL"):
+        raw = dict(raw)
+        raw["api_base"] = os.environ.get("BACKEND_PUBLIC_URL", "").strip().rstrip("/")
+    if raw.get("backend_public_url") and not raw.get("api_base"):
+        raw = dict(raw)
+        raw["api_base"] = str(raw["backend_public_url"]).strip().rstrip("/")
     return raw
 
 
@@ -228,6 +234,14 @@ class Handler(BaseHTTPRequestHandler):
             if url and anon:
                 out["supabaseUrl"] = url
                 out["supabaseAnonKey"] = anon
+            api_base = (
+                config.get("api_base") or config.get("backend_public_url")
+                or os.environ.get("BACKEND_PUBLIC_URL", "").strip()
+            )
+            if not api_base and self.headers.get("Host"):
+                api_base = "http://" + self.headers.get("Host", "localhost:8080").split(",")[0].strip()
+            if api_base:
+                out["apiBase"] = api_base.rstrip("/")
             self.send_json(out)
             return
         # Static file from web/
