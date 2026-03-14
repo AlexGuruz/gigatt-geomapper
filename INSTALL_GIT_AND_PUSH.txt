@@ -1,0 +1,30 @@
+Git is not installed (or not on your PATH). Do this:
+
+STEP 1 – Install Git
+--------------------
+1. Open this link in your browser:
+   https://git-scm.com/download/win
+
+2. Run the downloaded installer.
+3. Use the DEFAULT options (just click Next).
+4. Make sure "Git from the command line and also from 3rd-party software" is selected when asked.
+5. Finish the install.
+
+STEP 2 – Run the push script
+----------------------------
+1. Close any Command Prompt or PowerShell windows you have open.
+2. In File Explorer, go to this folder:
+   E:\GIGATT Geomapper
+3. Double-click:  commit-and-push.bat
+
+   The script will find Git in "C:\Program Files\Git" and run init, add, commit, and push.
+
+STEP 3 – Sign in to GitHub (if asked)
+-------------------------------------
+When it runs "git push", Windows may ask you to sign in to GitHub:
+- Use your GitHub username and a Personal Access Token (not your password).
+- Create a token at: https://github.com/settings/tokens
+  → "Generate new token (classic)" → check "repo" → Generate, then paste the token when prompted.
+
+That's it. After Step 1 and 2, your code will be on:
+https://github.com/AlexGuruz/Geomapping-APP

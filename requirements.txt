@@ -1,0 +1,9 @@
+# GIGATT Geomapper - Python dependencies
+# Install: pip install -r requirements.txt
+#
+# Note: supabase>=2.26 pulls storage3 with pyiceberg/pyroaring which need C++ build tools.
+# Pinning to <2.26 avoids that. Upgrade when pyiceberg has pre-built wheels for your Python.
+
+supabase>=2.0.0,<2.26
+PyJWT>=2.8.0
+python-dotenv>=1.0.0

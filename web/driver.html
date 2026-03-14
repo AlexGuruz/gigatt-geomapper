@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Driver Portal — GIGATT Geomapper</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    .driver-portal { max-width: 480px; margin: 2rem auto; padding: 1.5rem; }
+    .driver-portal h1 { margin-bottom: 1rem; font-size: 1.1rem; }
+    .driver-portal .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+    .driver-portal .placeholder { color: var(--text-muted); font-size: 0.9rem; }
+    .driver-portal button { padding: 0.5rem 1rem; background: var(--accent); color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="driver-portal">
+    <h1>Driver Portal</h1>
+    <div class="card">
+      <h2 style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">Current assignment</h2>
+      <p class="placeholder">No active assignment. Assignments appear here when a dispatcher assigns you a job.</p>
+    </div>
+    <div class="card">
+      <h2 style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">Availability</h2>
+      <p class="placeholder">Availability calendar (Phase 4).</p>
+    </div>
+    <button id="signOutBtn">Sign out</button>
+  </div>
+  <script src="js/config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/auth.js"></script>
+  <script>
+    (function() {
+      window.GeomapperAuth.init().then(function(hasAuth) {
+        if (hasAuth) {
+          window.GeomapperAuth.guardPage(false);
+        }
+      });
+      document.getElementById('signOutBtn').addEventListener('click', function() {
+        if (window.GeomapperAuth.supabase) {
+          window.GeomapperAuth.supabase.auth.signOut().then(function() {
+            window.location.href = '/login.html';
+          });
+        } else {
+          window.location.href = '/login.html';
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

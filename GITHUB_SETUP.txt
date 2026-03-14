@@ -1,0 +1,45 @@
+Push GIGATT Geomapper to GitHub
+==============================
+
+Your .gitignore already excludes: config.json, data/geocode_cache.json, __pycache__/, .env, *.log
+So those files will NOT be committed (good for secrets and caches).
+
+Step 1 – Commit locally
+-----------------------
+Open "Git Bash" in this folder (right-click folder → "Git Bash Here"), or any terminal where `git` works. Then run:
+
+   ./commit-and-push.bat
+
+Or run these manually:
+
+   git init
+   git add .cursor data python web .gitignore config.json.example poller.py README.txt server.py "Start GIGATT Geomapper.bat" start.bat "Stop GIGATT Geomapper.bat"
+   git commit -m "Initial commit: GIGATT Geomapper"
+
+Step 2 – Create repo on GitHub
+------------------------------
+1. Go to https://github.com/new
+2. Name the repo (e.g. "GIGATT-Geomapper")
+3. Do NOT add a README, .gitignore, or license (you already have files)
+4. Create the repository
+
+Step 3 – Add remote and push
+----------------------------
+In the same folder, run:
+
+   git remote add origin https://github.com/AlexGuruz/Geomapping-APP.git
+   git branch -M main
+   git push -u origin main
+
+If you use SSH instead of HTTPS:
+
+   git remote add origin git@github.com:AlexGuruz/Geomapping-APP.git
+   git branch -M main
+   git push -u origin main
+
+(If you created the repo as "Geomapping APP" with a space, use this URL instead:
+   https://github.com/AlexGuruz/Geomapping%20APP.git )
+
+If Git is not installed
+-----------------------
+Install Git for Windows from https://git-scm.com/download/win then run the steps above in "Git Bash" or a new terminal.

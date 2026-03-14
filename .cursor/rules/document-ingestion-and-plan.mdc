@@ -1,0 +1,13 @@
+---
+description: Backend is multi-source document ingestion; first object is ingestion_document, then permit_candidate, then job. Follow plan.md Sections 7, 7.9, 13.
+---
+
+# Document ingestion and dispatch plan context
+
+When working on backend, document ingestion, permits, or jobs in this project:
+
+- **Backend design:** Multi-source document ingestion, not "PDF ingestion." The first object is **ingestion_document** (raw input from any source). Parsing produces **permit_candidate** (review required). After approval, create **job** (dispatchable). Do not go directly from raw document to job or driver assignment.
+- **Accepted inputs (v1):** Email PDF attachments, text message screenshots, email screenshots, manual file upload (PDF or image). Later: direct PDF/image upload, forwarded email content, pasted text.
+- **Do NOT assume:** One file type, one layout, one source, or clean machine-readable PDFs only. The pipeline must normalize all inputs to one schema.
+- **Pipeline:** Raw intake → Extract (permit_candidate, review_status) → Normalize → Review/confirm (mandatory in v1) → Create job → Assign driver.
+- **Authority:** plan.md Sections 7, 7.9, 7.12; execution rules Section 13. Follow phased build order (Section 8); do not skip Phase 0; keep market routes and dispatch jobs separate (Section 6.4).
