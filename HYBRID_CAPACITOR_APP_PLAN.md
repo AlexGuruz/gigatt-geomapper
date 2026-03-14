@@ -1,6 +1,8 @@
 # Hybrid Capacitor App — Build Plan & Reference
 
-**Purpose:** Single reference for building the **role-based** driver-tracking + dispatcher (Geomapper) system: Capacitor mobile app for drivers, Supabase backend, and Geomapper web app for dispatch. Auth and role-based routing are core architecture.
+**Purpose:** Summary reference for the **role-based** driver-tracking + dispatcher (Geomapper) system: Capacitor mobile app for drivers, Supabase backend, and Geomapper web app for dispatch. Auth and role-based routing are core architecture. **Authoritative source:** [plan.md](plan.md) — use it for phased build order (Section 11), data model (Section 9), ingestion pipeline (Section 10), and V2+ (Section 15).
+
+**Last updated:** 2026-03-14
 
 ---
 
@@ -114,15 +116,18 @@ Driver calendar availability flows into dispatcher UI:
 
 ---
 
-## 8. Build Phases (Suggested Order)
+## 8. Build Phases (aligned with plan.md Section 11)
 
 | Phase | Focus |
 |-------|--------|
-| **1. Foundation** | Supabase; auth; tables; role-based post-login routing; driver → `/driver`, dispatcher → `/dispatch`. |
-| **2. Dispatcher** | Connect Geomapper to auth; load drivers; right sidebar; map markers; driver availability from calendar. |
-| **3. Driver app** | Capacitor; driver portal (assignment, permits, nav, calendar, profile); location + background. |
-| **4. Admin** | Admin tabs; manage users, roles, settings. |
-| **5. Rollout** | TestFlight; invite drivers; verify install, login, driver portal, availability calendar, Geomapper updates. |
+| **0** | Baseline: document endpoints, map/sidebar, regression checklist (see BASELINE.md). |
+| **1. Foundation** | Supabase; auth; tables; role-based post-login routing; driver → `/driver`, dispatcher → `/dispatch`; `POST /api/driver-locations/batch`. |
+| **2. Dispatcher** | Right sidebar; load drivers (polling); driver markers; driver_assignment focus; left sidebar unchanged. |
+| **3. Assignments + ETA + availability** | Jobs API; assign driver; driver card ETA/availability; assignment validation (state permissions). |
+| **4. Driver app** | Capacitor; driver portal (assignment, permits, nav, calendar, profile); location + background; offline queue. |
+| **5. Ingestion + permit-to-job** | ingestion_document → permit_candidate → review → job (plan.md Section 10). |
+| **6. Rollout** | TestFlight; invite drivers; verify install, login, driver portal, Geomapper updates. |
+| **7 (v1.1/v2)** | Next-route matching; realtime positions; see plan.md Section 15 (V2+). |
 
 ---
 
@@ -143,4 +148,4 @@ Driver calendar availability flows into dispatcher UI:
 
 ---
 
-*Reference for the GIGATT Geomapper role-based driver-tracking project. See plan.md for the full build plan.*
+*Summary for the GIGATT Geomapper role-based driver-tracking project. For the full build plan, phased steps, ingestion pipeline, and execution rules, see [plan.md](plan.md).*

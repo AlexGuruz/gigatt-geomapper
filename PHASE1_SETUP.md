@@ -1,16 +1,18 @@
 # Phase 1 Setup Guide
 
-Complete these steps to enable Supabase auth and the driver-locations batch API.
+**Purpose:** Enable Supabase auth and the driver-locations batch API. Aligned with **plan.md** Section 11 (Phase 1 — Foundation).
+
+**Last updated:** 2026-03-14
+
+---
 
 ## 1. Create Supabase project
 
 1. Go to [supabase.com](https://supabase.com) and create a project.
-2. In Project Settings → API, copy:
-  - **Project URL** → [https://mfwknpsmrxuiymfrvioz.supabase.co](https://mfwknpsmrxuiymfrvioz.supabase.co)
-  - **anon public** key  → eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1md2tucHNtcnh1aXltZnJ2aW96Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0ODg4NTIsImV4cCI6MjA4OTA2NDg1Mn0._LaroiKLYMdoLIjuDk1Li-R8JxGidLSOUAGaFbEpwXU
-  - **service_role** key → sb_publishable_MC6BM393fHqI2hLZ1FiPOg_FNRFUewx  
-    
-  mcp server: [https://mcp.supabase.com/mcp?project_ref=mfwknpsmrxuiymfrvioz&features=docs%2Caccount%2Cdatabase%2Cdebugging%2Cdevelopment%2Cfunctions%2Cbranching%2Cstorage](https://mcp.supabase.com/mcp?project_ref=mfwknpsmrxuiymfrvioz&features=docs%2Caccount%2Cdatabase%2Cdebugging%2Cdevelopment%2Cfunctions%2Cbranching%2Cstorage)
+2. In **Project Settings → API**, copy:
+   - **Project URL** (e.g. `https://YOUR_PROJECT_REF.supabase.co`)
+   - **anon public** key (for client-side auth and `/api/config`)
+   - **service_role** key (for backend APIs only — never expose in client; store in `.env` only)
 
 ## 2. Run migration
 
@@ -70,4 +72,6 @@ Creates:
 - Sign in with a dispatcher → lands on map.
 - Sign in with a driver → lands on `/driver.html`.
 - `POST /api/driver-locations/batch` with valid `driver_id` and `events[]` when Supabase is configured.
+
+For full Phase 1 acceptance criteria and next phases (dispatcher right sidebar, assignments, driver app), see **plan.md** Section 11.
 

@@ -5,6 +5,8 @@
 **Document version:** 2.1  
 **Last updated:** 2026-03-14
 
+Related docs (setup, deploy, baseline, migration, driver app) are indexed in [README.md](README.md#documentation-index).
+
 ---
 
 ## Visual Overview

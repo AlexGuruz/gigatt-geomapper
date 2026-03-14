@@ -1,5 +1,11 @@
 # Migration Path (Plan Section 8.6)
 
+**Purpose:** Documents the V1 migration decision. See **plan.md** Section 8.6 and Section 11 (Phased Build Order).
+
+**Last updated:** 2026-03-14
+
+---
+
 **V1 Decision: Option A — Parallel transition**
 
 | Layer | Source of truth | Notes |

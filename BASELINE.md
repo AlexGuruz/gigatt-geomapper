@@ -1,8 +1,8 @@
 # Phase 0 — Geomapper Baseline (Pre-Build)
 
-**Purpose:** Document current behavior before any plan.md changes. Use this to verify "unchanged" after modifications.
+**Purpose:** Document current behavior before any plan.md changes. Use this to verify "unchanged" after modifications. Refer to **plan.md** Section 3 (What Must Not Be Broken), Section 11 Phase 0, and Section 16 (Execution Rules for AI Agent).
 
-**Created:** 2026-03-14
+**Last updated:** 2026-03-14
 
 ---
 

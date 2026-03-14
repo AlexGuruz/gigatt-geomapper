@@ -1,6 +1,10 @@
 # Driver Tracking & Hybrid Capacitor App — Architecture Reference
 
-This document is the single reference for building the driver mobile app, auth, and Geomapper integration. Use it when planning and implementing the system.
+**Purpose:** Reference for building the driver mobile app, auth, and Geomapper integration. **Authoritative build order and data model:** [plan.md](plan.md). Use plan.md Section 11 (Phased Build Order), Section 9 (Data Model), and Section 10 (Permit & ingestion); use this doc for driver-install flow, auth overview, and three-piece setup.
+
+**Last updated:** 2026-03-14
+
+---
 
 ---
 
@@ -227,14 +231,17 @@ Capacitor and your backend handle both; the main differences are **build process
 
 ---
 
-## 8. Build order (phases)
+## 8. Build order (phases — see plan.md Section 11 for full steps)
 
 | Phase | Focus |
-|------|--------|
-| **1. Foundation** | Supabase (or equivalent) project; auth; `users` + roles; drivers/dispatchers tables; simple login in web app. |
-| **2. Dispatcher** | Connect Geomapper to auth; load drivers and `driver_last_location` from API; show markers and route assignments. |
-| **3. Driver app** | Small web UI → Capacitor; iOS (and Android) build; location permission flow; background location; POST location to backend. |
-| **4. Rollout** | Publish to TestFlight (and Android channel); invite a few test drivers; verify install → login → permission → background updates → map updates in Geomapper. |
+|-------|--------|
+| **0** | Baseline (BASELINE.md); document current endpoints and behaviors. |
+| **1. Foundation** | Supabase; auth; tables (profiles, driver_profiles, location_history, driver_last_location, etc.); role-based routing; idempotent `POST /api/driver-locations/batch`. |
+| **2. Dispatcher** | Right sidebar; GET drivers + last location; driver list; driver markers; focus mode driver_assignment (plan Section 6.4). |
+| **3. Assignments + ETA + availability** | Jobs API; assign driver; ETA/availability; assignment validation (state permissions); job_route_states. |
+| **4. Driver app** | Capacitor; driver portal; location + background; offline queue; batch upload with event_id. |
+| **5. Ingestion + permit-to-job** | ingestion_document → permit_candidate → review → job (plan Section 10). |
+| **6. Rollout** | TestFlight; invite drivers; verify install, login, location, Geomapper updates. |
 
 ---
 
@@ -246,4 +253,4 @@ Capacitor and your backend handle both; the main differences are **build process
 - **Updates:** Backend and Geomapper = deploy and refresh. Driver app = web-only changes can sometimes ship via live update; native changes need a new build (TestFlight/Play/APK). Keep the driver app thin and logic on the backend so most new features don’t require driver action.
 - **Cross-platform:** Same backend and Geomapper; one Capacitor codebase for iOS and Android driver app. Works on both Google (Android) and iPhone.
 
-Use this document as the single reference while building the plan and the app.
+Use this document together with **[plan.md](plan.md)** for the full build plan, phase checklist, ingestion pipeline, and execution rules.
