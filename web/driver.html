@@ -35,9 +35,11 @@
   <script>
     (function() {
       window.GeomapperAuth.init().then(function(hasAuth) {
-        if (hasAuth) {
-          window.GeomapperAuth.guardPage(false);
+        if (!hasAuth) {
+          window.location.href = '/login.html';
+          return;
         }
+        window.GeomapperAuth.guardPage(false);
       });
       document.getElementById('signOutBtn').addEventListener('click', function() {
         if (window.GeomapperAuth.supabase) {

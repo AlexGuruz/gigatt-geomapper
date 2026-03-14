@@ -57,7 +57,7 @@
   function requireAuth(onAuthenticated) {
     init().then(function(hasAuth) {
       if (!hasAuth) {
-        if (onAuthenticated) onAuthenticated(null, false);
+        window.location.href = '/login.html';
         return;
       }
       return supabase.auth.getSession().then(function(r) {
@@ -70,7 +70,7 @@
     });
   }
 
-  function guardPage(redirectIfDriver) {
+  function guardPage(redirectIfDriver, onStay) {
     requireAuth(function(session, ok) {
       if (!ok || !session) return;
       fetchRole(session).then(function(role) {
@@ -83,6 +83,7 @@
           window.location.href = '/index.html';
           return;
         }
+        if (typeof onStay === 'function') onStay();
       });
     });
   }

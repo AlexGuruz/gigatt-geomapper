@@ -75,7 +75,7 @@
                 });
             });
           } else {
-            errEl.textContent = 'Auth not configured. Set up Supabase in config or .env.';
+            errEl.textContent = 'Backend not configured. Set GEOMAPPER_API_BASE in web/js/config.js to your deployed backend URL (e.g. StackBlitz or Railway).';
             errEl.style.display = 'block';
           }
         }

@@ -66,10 +66,11 @@ No remote is set yet. Do this once:
 The repo includes a `package.json` so StackBlitz can run a dev server and show the app in the preview:
 
 1. **Import** the repo in StackBlitz (e.g. **Import from GitHub** → `AlexGuruz/gigatt-geomapper`).
-2. StackBlitz will run `npm install` and then `npm start`, which serves the `web/` folder on port 3000. The **Preview** panel should show the app (dispatcher map, or login if not authenticated).
-3. To use live data, set your deployed backend URL in `web/js/config.js`:  
+2. StackBlitz runs `npm install` and `npm start`, which serves the `web/` folder on port 3000.
+3. **Auth-first flow:** The app is wrapped with Supabase auth. If the backend is not configured (or not reachable), the preview **shows the login page** and the message: *"Backend not configured. Set GEOMAPPER_API_BASE in web/js/config.js to your deployed backend URL."* The dispatcher map and route cards load **only after** a successful sign-in (dispatcher/admin role).
+4. To **demonstrate full features** (map, route cards, refresh, etc.), set your deployed backend URL in `web/js/config.js`:  
    `window.GEOMAPPER_API_BASE = 'https://your-backend.up.railway.app';`  
-   Leave it as `''` to only preview UI (API calls will fail until you point at a backend).
+   Then sign in with a test dispatcher account; the map and sidebar will load and reflect backend data.
 
 ## GitHub + StackBlitz workflow (commit per rollout)
 
