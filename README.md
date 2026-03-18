@@ -13,8 +13,19 @@ Portable web app: poll email for PilotCar load alerts, geocode routes, and view 
 | **[plan.md](plan.md)** | **Single source of truth.** Full build plan: architecture, phases, data model, ingestion pipeline, driver/dispatcher/admin flows, and execution rules. |
 | [BASELINE.md](BASELINE.md) | Phase 0 baseline: current endpoints, map/sidebar behavior, routes.json schema, regression checklist. Use to verify “unchanged” after changes. |
 | [PHASE1_SETUP.md](PHASE1_SETUP.md) | Phase 1 setup: Supabase project, migrations, env config, test users. Auth + driver-locations batch API. |
+| [PHASE4_SETUP.md](PHASE4_SETUP.md) | Phase 4 setup: document ingestion, permit candidates, and dispatcher review flow. |
+| [PHASE6_SETUP.md](PHASE6_SETUP.md) | Phase 6 setup: jobs CRUD, assignment, candidate-drivers, and dispatch UI. |
+| [PHASE7_SETUP.md](PHASE7_SETUP.md) | Phase 7 setup: jobs near driver (distance filter), map integration. |
+| [DEPLOY_READINESS.md](DEPLOY_READINESS.md) | What is ready vs not ready for driver app deploy; admin setup; Phase 6 checklist. |
+| [driver-app/README.md](driver-app/README.md) | Capacitor scaffold for native iOS/Android driver app (sync from web, build for TestFlight/Play). |
+| [DEPLOY.md](DEPLOY.md) | Deploy backend (Railway/Render), env vars, Supabase auth URLs, frontend hosting. |
+| [ENV_VARS.md](ENV_VARS.md) | Environment variables for local and production. |
+| [PHASE6_VERIFICATION.md](PHASE6_VERIFICATION.md) | Phase 6 verification checklist (test drivers, offline/idempotency, last-seen). |
+| [TESTING.md](TESTING.md) | How to run API tests (scripts + pytest), what each covers, and coverage gaps. |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Branch naming, run tests before PR, where to add new tests. |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common issues: routes not showing, 503, driver app connection, login, admin. |
+| [REPO_REVIEW.md](REPO_REVIEW.md) | Review summary: test/docs/UX improvements and further recommendations. |
 | [MIGRATION_PATH.md](MIGRATION_PATH.md) | V1 migration decision (Option A: parallel transition). Plan Section 8.6. |
-| [DEPLOY.md](DEPLOY.md) | Deploy backend (Railway/Render); point frontend at API; GitHub + StackBlitz workflow. |
 | [HYBRID_CAPACITOR_APP_PLAN.md](HYBRID_CAPACITOR_APP_PLAN.md) | Driver app (Capacitor), role-based routing, availability, and build phases — summary aligned with plan.md. |
 | [DRIVER_TRACKING_ARCHITECTURE.md](DRIVER_TRACKING_ARCHITECTURE.md) | Driver tracking, auth, three-piece setup (driver app, backend, Geomapper). Companion to plan.md. |
 
@@ -34,6 +45,14 @@ When in doubt, follow **plan.md** (Section 3: What Must Not Be Broken; Section 1
    - Then starts the poller, the local server, and opens the browser to http://127.0.0.1:8080.
 
 **With Supabase (Phase 1+):** For auth and driver-locations batch API, follow [PHASE1_SETUP.md](PHASE1_SETUP.md). See [plan.md](plan.md) Section 11 (Phased Build Order).
+
+---
+
+## Development & testing
+
+- **Run API smoke tests:** Start the server (`python server.py`), then run `python scripts/run_api_tests.py [BASE_URL]`. This runs Phase 3, 5, and 7; if `GEOMAPPER_DRIVER_ID` is set, Phase 6 runs too. See **[TESTING.md](TESTING.md)** for details.
+- **Pytest:** `pytest tests/ -v` (uses `GEOMAPPER_URL`; set `GEOMAPPER_ADMIN_JWT` for admin tests).
+- **Contributing:** See **[CONTRIBUTING.md](CONTRIBUTING.md)** for branch naming, pre-PR checks, and where to add tests. **Stuck?** See **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)**.
 
 ---
 

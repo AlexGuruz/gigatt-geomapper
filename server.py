@@ -20,6 +20,57 @@ except ImportError:
     is_configured = lambda: False
 
 
+def _parse_multipart(body_bytes, content_type):
+    """
+    Parse multipart/form-data body. Returns dict: name -> str value, or name -> (filename, bytes, mime).
+    Works without cgi (Python 3.13+).
+    """
+    out = {}
+    if not content_type or "multipart/form-data" not in (content_type if isinstance(content_type, str) else content_type.decode("utf-8", errors="replace")):
+        return out
+    # Get boundary
+    for part in (content_type.split(";") if isinstance(content_type, str) else content_type.decode("utf-8").split(";")):
+        part = part.strip()
+        if part.lower().startswith("boundary="):
+            boundary = part[9:].strip().strip('"').encode("ascii")
+            break
+    else:
+        return out
+    if not body_bytes or isinstance(body_bytes, str):
+        body_bytes = body_bytes.encode("utf-8") if body_bytes else b""
+    parts = body_bytes.split(b"--" + boundary)
+    for raw in parts:
+        raw = raw.strip()
+        if not raw or raw == b"--":
+            continue
+        head, _, rest = raw.partition(b"\r\n\r\n")
+        if not rest:
+            continue
+        name = None
+        filename = None
+        mime = b"application/octet-stream"
+        for line in head.split(b"\r\n"):
+            line = line.strip()
+            if line.lower().startswith(b"content-disposition:"):
+                val = line.split(b":", 1)[1].strip().decode("utf-8", errors="replace")
+                for tok in val.split(";"):
+                    tok = tok.strip()
+                    if tok.lower().startswith("name="):
+                        name = tok[5:].strip('"')
+                    elif tok.lower().startswith("filename="):
+                        filename = tok[9:].strip('"')
+            elif line.lower().startswith(b"content-type:"):
+                mime = line.split(b":", 1)[1].strip()
+        if name is None:
+            continue
+        content = rest.rstrip(b"\r\n")
+        if filename is not None:
+            out[name] = (filename, content, mime.decode("utf-8", errors="replace") if isinstance(mime, bytes) else mime)
+        else:
+            out[name] = content.decode("utf-8", errors="replace")
+    return out
+
+
 def _is_connection_aborted(exc):
     """True if the client closed the connection (timeout, refresh, etc.)."""
     if exc is None:
@@ -167,8 +218,39 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, PATCH, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, PATCH, POST, PUT, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+    def _get_bearer_token(self):
+        auth = self.headers.get("Authorization") or ""
+        if isinstance(auth, bytes):
+            auth = auth.decode("utf-8", errors="replace")
+        auth = auth.strip()
+        if auth.lower().startswith("bearer "):
+            return auth[7:].strip()
+        return auth or None
+
+    def _require_admin(self):
+        """Verify Bearer token and admin role. Returns (user_id, role) or None (and sends 401/403)."""
+        supabase = _get_supabase()
+        if not supabase:
+            self.send_json({"error": "Supabase not configured"}, 503)
+            return None
+        token = self._get_bearer_token()
+        if not token:
+            self.send_json({"error": "Authorization required"}, 401)
+            return None
+        try:
+            from backend.admin_auth import get_user_and_role_from_token
+            user_id, role = get_user_and_role_from_token(supabase, "Bearer " + token)
+        except Exception as e:
+            log("admin_auth error: %s" % e)
+            self.send_json({"error": "Invalid token"}, 401)
+            return None
+        if role != "admin":
+            self.send_json({"error": "Admin access required"}, 403)
+            return None
+        return (user_id, role)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -176,8 +258,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _handle_batch_locations(self):
-        """Idempotent batch location upload. Plan 8.1-8.2."""
-        supabase = _get_supabase() if callable(getattr(__import__('backend.supabase_client', fromlist=['is_configured']), 'is_configured', None)) else None
+        """Idempotent batch location upload. Plan 8.1-8.2, Phase 4: optional Bearer auth (driver posts own only)."""
         try:
             from backend.supabase_client import is_configured
             if not is_configured():
@@ -196,14 +277,28 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self.send_json({"error": "Invalid JSON"}, 400)
             return
-        driver_id = payload.get("driver_id")
         events = payload.get("events") or []
-        if not driver_id:
-            self.send_json({"error": "driver_id required"}, 400)
-            return
         if not isinstance(events, list):
             self.send_json({"error": "events must be an array"}, 400)
             return
+
+        driver_id = None
+        auth_header = self.headers.get("Authorization")
+        if auth_header:
+            try:
+                from backend.driver_auth import resolve_driver_id_from_token
+                driver_id = resolve_driver_id_from_token(supabase, auth_header)
+            except Exception as e:
+                log("driver_auth resolve: %s" % e)
+        if not driver_id:
+            driver_id = payload.get("driver_id")
+        if not driver_id:
+            self.send_json({"error": "driver_id required (or send Authorization: Bearer <token>)"}, 400)
+            return
+        if auth_header and payload.get("driver_id") and str(payload.get("driver_id")) != str(driver_id):
+            self.send_json({"error": "driver_id does not match authenticated driver"}, 403)
+            return
+
         try:
             from backend.location_batch import batch_location_events
             accepted, errs = batch_location_events(supabase, str(driver_id), events)
@@ -223,8 +318,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(routes)
             return
         if path == "/api/drivers":
-            drivers = load_json(DRIVERS_PATH, [])
-            self.send_json(drivers)
+            supabase = _get_supabase()
+            if supabase:
+                try:
+                    from backend.drivers_list import get_drivers
+                    drivers = get_drivers(supabase)
+                    self.send_json(drivers)
+                except Exception as e:
+                    log("get_drivers error: %s" % e)
+                    drivers = load_json(DRIVERS_PATH, [])
+                    self.send_json(drivers)
+            else:
+                drivers = load_json(DRIVERS_PATH, [])
+                self.send_json(drivers)
             return
         if path == "/api/config":
             config = load_config()
@@ -243,6 +349,177 @@ class Handler(BaseHTTPRequestHandler):
             if api_base:
                 out["apiBase"] = api_base.rstrip("/")
             self.send_json(out)
+            return
+        # Phase 3: Jobs API
+        if path.startswith("/api/jobs/"):
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            path_rest = path[len("/api/jobs/"):].rstrip("/")
+            if "/" in path_rest:
+                job_id, sub = path_rest.split("/", 1)
+                if sub == "candidate-drivers":
+                    try:
+                        from backend.drivers_list import get_drivers
+                        from backend.assignment_validation import validate_assignment
+                        drivers = get_drivers(supabase)
+                        job = None
+                        try:
+                            from backend.jobs import get_job
+                            job = get_job(supabase, job_id)
+                        except Exception:
+                            pass
+                        if not job:
+                            self.send_json({"error": "Job not found"}, 404)
+                            return
+                        candidates = []
+                        for d in drivers:
+                            v = validate_assignment(supabase, d["id"], job_id)
+                            candidates.append({
+                                "driver": d,
+                                "allowed": v.get("allowed", False),
+                                "reasons": v.get("reasons", []),
+                            })
+                        self.send_json({"job_id": job_id, "candidates": candidates})
+                    except Exception as e:
+                        log("candidate-drivers error: %s" % e)
+                        self.send_json({"error": str(e)[:200]}, 500)
+                    return
+            elif path_rest:
+                job_id = path_rest
+                try:
+                    from backend.jobs import get_job
+                    job = get_job(supabase, job_id)
+                    if not job:
+                        self.send_json({"error": "Job not found"}, 404)
+                        return
+                    self.send_json(job)
+                except Exception as e:
+                    log("get_job error: %s" % e)
+                    self.send_json({"error": str(e)[:200]}, 500)
+                return
+        if path == "/api/jobs":
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            qs = parse_qs(urlparse(self.path).query)
+            status = (qs.get("status") or [None])[0]
+            near_lat = (qs.get("near_lat") or [None])[0]
+            near_lng = (qs.get("near_lng") or [None])[0]
+            min_mi = (qs.get("min_mi") or [None])[0]
+            max_mi = (qs.get("max_mi") or [None])[0]
+            near_driver_id = (qs.get("near_driver_id") or [None])[0]
+            try:
+                from backend.jobs import list_jobs
+                jobs = list_jobs(supabase, status=status, near_lat=near_lat, near_lng=near_lng, min_mi=min_mi, max_mi=max_mi, near_driver_id=near_driver_id)
+                self.send_json(jobs)
+            except Exception as e:
+                log("list_jobs error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Phase 5: GET ingestion-documents, permit-candidates
+        if path == "/api/ingestion-documents":
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            qs = parse_qs(urlparse(self.path).query)
+            ps = (qs.get("processing_status") or [None])[0]
+            st = (qs.get("source_type") or [None])[0]
+            try:
+                from backend.ingestion import list_ingestion_documents
+                out = list_ingestion_documents(supabase, processing_status=ps, source_type=st)
+                self.send_json(out)
+            except Exception as e:
+                log("list_ingestion_documents error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        if path == "/api/permit-candidates":
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            qs = parse_qs(urlparse(self.path).query)
+            rs = (qs.get("review_status") or [None])[0]
+            try:
+                from backend.ingestion import list_permit_candidates
+                out = list_permit_candidates(supabase, review_status=rs)
+                self.send_json(out)
+            except Exception as e:
+                log("list_permit_candidates error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Current user profile (id, email, role) — requires Bearer
+        if path == "/api/me":
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            token = self._get_bearer_token()
+            if not token:
+                self.send_json({"error": "Authorization required"}, 401)
+                return
+            try:
+                from backend.admin_auth import get_user_and_role_from_token
+                from backend.admin import get_user
+                user_id, role = get_user_and_role_from_token(supabase, "Bearer " + token)
+                if not user_id:
+                    self.send_json({"error": "Invalid token"}, 401)
+                    return
+                profile = get_user(supabase, user_id)
+                if not profile:
+                    self.send_json({"id": user_id, "email": None, "role": role or "driver", "active": True})
+                    return
+                self.send_json({"id": profile.get("id"), "email": profile.get("email"), "role": profile.get("role") or "driver", "active": profile.get("active", True)})
+            except Exception as e:
+                log("api/me error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Admin: list users (admin only)
+        if path == "/api/admin/users":
+            admin = self._require_admin()
+            if admin is None:
+                return
+            supabase = _get_supabase()
+            try:
+                from backend.admin import list_users
+                out = list_users(supabase)
+                self.send_json(out)
+            except Exception as e:
+                log("admin list_users error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Admin: driver state permissions (admin only)
+        match_dsp = re.match(r"^/api/admin/drivers/([^/]+)/state-permissions$", path)
+        if match_dsp:
+            admin = self._require_admin()
+            if admin is None:
+                return
+            driver_id = match_dsp.group(1)
+            supabase = _get_supabase()
+            try:
+                from backend.admin import list_driver_state_permissions
+                out = list_driver_state_permissions(supabase, driver_id)
+                self.send_json(out)
+            except Exception as e:
+                log("admin list_driver_state_permissions error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Admin: dispatch config (admin only)
+        if path == "/api/admin/config":
+            admin = self._require_admin()
+            if admin is None:
+                return
+            supabase = _get_supabase()
+            try:
+                from backend.admin import get_dispatch_config
+                out = get_dispatch_config(supabase)
+                self.send_json(out)
+            except Exception as e:
+                log("admin get_dispatch_config error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
             return
         # Static file from web/
         if path == "/":
@@ -270,6 +547,113 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         path = urlparse(self.path).path
+        # Admin: update user (role, active)
+        match_admin_user = re.match(r"^/api/admin/users/([^/]+)$", path)
+        if match_admin_user:
+            admin = self._require_admin()
+            if admin is None:
+                return
+            user_id = match_admin_user.group(1)
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            supabase = _get_supabase()
+            try:
+                from backend.admin import update_user
+                out = update_user(supabase, user_id, payload)
+                if out is not None:
+                    self.send_json(out)
+                else:
+                    self.send_json({"error": "User not found"}, 404)
+            except Exception as e:
+                log("admin update_user error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Admin: update dispatch config (body: { key, value } or { updates: { k: v } })
+        if path == "/api/admin/config":
+            admin = self._require_admin()
+            if admin is None:
+                return
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            supabase = _get_supabase()
+            try:
+                from backend.admin import update_dispatch_config, get_dispatch_config
+                if "key" in payload and "value" in payload:
+                    update_dispatch_config(supabase, payload["key"], payload["value"])
+                elif "updates" in payload and isinstance(payload["updates"], dict):
+                    for k, v in payload["updates"].items():
+                        update_dispatch_config(supabase, k, v)
+                out = get_dispatch_config(supabase)
+                self.send_json(out)
+            except Exception as e:
+                log("admin update_dispatch_config error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Phase 5: PATCH /api/permit-candidates/:id (edit candidate fields)
+        match_cand = re.match(r"^/api/permit-candidates/([^/]+)$", path)
+        if match_cand:
+            cand_id = match_cand.group(1)
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            try:
+                from backend.ingestion import update_permit_candidate
+                out = update_permit_candidate(supabase, cand_id, payload)
+                if out is not None:
+                    self.send_json(out)
+                else:
+                    self.send_json({"error": "Candidate not found"}, 404)
+            except Exception as e:
+                log("patch permit_candidate error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Phase 3: PATCH /api/jobs/:id (update job status)
+        match_job = re.match(r"^/api/jobs/([^/]+)$", path)
+        if match_job:
+            job_id = match_job.group(1)
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            try:
+                from backend.jobs import get_job, update_job_status, update_job
+                if "status" in payload or "origin_lat" in payload or "origin_lng" in payload:
+                    updated = update_job(supabase, job_id, payload)
+                    if updated:
+                        self.send_json(updated)
+                    else:
+                        self.send_json({"error": "Job not found"}, 404)
+                else:
+                    self.send_json({"error": "No status or origin_lat/lng in body"}, 400)
+            except Exception as e:
+                log("patch job error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
         match = re.match(r"^/api/routes/(.+)$", path)
         if not match:
             self.send_error(404)
@@ -297,6 +681,36 @@ class Handler(BaseHTTPRequestHandler):
             return
         save_json(ROUTES_PATH, routes)
         self.send_json(updated)
+
+    def do_PUT(self):
+        path = urlparse(self.path).path
+        # Admin: set driver state permissions (body: { permissions: [ { state_code, allowed } ] })
+        match_put_dsp = re.match(r"^/api/admin/drivers/([^/]+)/state-permissions$", path)
+        if match_put_dsp:
+            admin = self._require_admin()
+            if admin is None:
+                return
+            driver_id = match_put_dsp.group(1)
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            permissions = payload.get("permissions")
+            if not isinstance(permissions, list):
+                permissions = []
+            supabase = _get_supabase()
+            try:
+                from backend.admin import set_driver_state_permissions
+                out = set_driver_state_permissions(supabase, driver_id, permissions)
+                self.send_json(out)
+            except Exception as e:
+                log("admin set_driver_state_permissions error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        self.send_error(404)
 
     def do_POST(self):
         global last_poll_time, _last_poll_stats
@@ -330,33 +744,188 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/driver-locations/batch":
             self._handle_batch_locations()
             return
+        # Phase 3: POST /api/jobs (create job - manual for testing; Phase 5 will add from permit_candidate)
+        if path == "/api/jobs":
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            try:
+                from backend.jobs import create_job
+                job = create_job(supabase, payload)
+                if job:
+                    self.send_json(job)
+                else:
+                    self.send_json({"error": "Create failed"}, 500)
+            except Exception as e:
+                log("create_job error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Phase 5: POST /api/ingestion-documents (multipart: file + source_type)
+        if path == "/api/ingestion-documents":
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            ct = self.headers.get("Content-Type", "")
+            if "multipart/form-data" not in ct:
+                self.send_json({"error": "Content-Type must be multipart/form-data"}, 400)
+                return
+            try:
+                cl = int(self.headers.get("Content-Length", 0))
+                if cl <= 0:
+                    self.send_json({"error": "Content-Length required"}, 400)
+                    return
+                body_bytes = self.rfile.read(cl)
+                form = _parse_multipart(body_bytes, ct)
+                file_item = form.get("file") or form.get("document")
+                if isinstance(file_item, tuple):
+                    filename, file_data, mime_type = file_item[0], file_item[1], file_item[2] if len(file_item) > 2 else "application/octet-stream"
+                else:
+                    file_data = None
+                    filename = "upload.bin"
+                    mime_type = None
+                source_type = (form.get("source_type") or "manual_upload").strip() if isinstance(form.get("source_type"), str) else "manual_upload"
+                if source_type not in ("email_pdf", "text_screenshot", "email_screenshot", "manual_upload"):
+                    source_type = "manual_upload"
+                if not file_data:
+                    self.send_json({"error": "file or document field required"}, 400)
+                    return
+                from backend.ingestion import create_ingestion_document
+                doc = create_ingestion_document(client=supabase, source_type=source_type, file_data=file_data, filename=filename, mime_type=mime_type)
+                if doc:
+                    self.send_json(doc)
+                else:
+                    self.send_json({"error": "Create failed"}, 500)
+            except Exception as e:
+                log("ingestion-documents upload error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Phase 5: POST /api/ingestion-documents/:id/parse
+        if path.startswith("/api/ingestion-documents/") and path.endswith("/parse"):
+            doc_id = path[len("/api/ingestion-documents/"):-len("/parse")].rstrip("/")
+            if not doc_id:
+                self.send_error(404)
+                return
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            try:
+                from backend.ingestion import parse_ingestion_document
+                candidate, err = parse_ingestion_document(supabase, doc_id)
+                if err:
+                    self.send_json({"error": err}, 400)
+                    return
+                self.send_json({"permit_candidate": candidate, "ingestion_document_id": doc_id})
+            except Exception as e:
+                log("parse error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Phase 5: POST /api/permit-candidates/:id/approve
+        if re.match(r"^/api/permit-candidates/[^/]+/approve$", path):
+            parts = path.split("/")
+            cand_id = parts[-2] if len(parts) >= 5 else None
+            if not cand_id:
+                self.send_error(404)
+                return
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            try:
+                from backend.ingestion import approve_permit_candidate, get_permit_candidate
+                approve_permit_candidate(supabase, cand_id)
+                out = get_permit_candidate(supabase, cand_id)
+                self.send_json(out or {"id": cand_id, "review_status": "approved"})
+            except Exception as e:
+                log("approve error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Phase 5: POST /api/permit-candidates/:id/reject
+        if re.match(r"^/api/permit-candidates/[^/]+/reject$", path):
+            parts = path.split("/")
+            cand_id = parts[-2] if len(parts) >= 5 else None
+            if not cand_id:
+                self.send_error(404)
+                return
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            try:
+                from backend.ingestion import reject_permit_candidate, get_permit_candidate
+                reject_permit_candidate(supabase, cand_id)
+                out = get_permit_candidate(supabase, cand_id)
+                self.send_json(out or {"id": cand_id, "review_status": "rejected"})
+            except Exception as e:
+                log("reject error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Phase 5: POST /api/permit-candidates/:id/create-job
+        if re.match(r"^/api/permit-candidates/[^/]+/create-job$", path):
+            parts = path.split("/")
+            cand_id = parts[-2] if len(parts) >= 6 else None
+            if not cand_id:
+                self.send_error(404)
+                return
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            try:
+                from backend.ingestion import create_job_from_candidate
+                job, err = create_job_from_candidate(supabase, cand_id)
+                if err:
+                    self.send_json({"error": err}, 400)
+                    return
+                self.send_json(job)
+            except Exception as e:
+                log("create_job_from_candidate error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
+        # Phase 3: POST /api/jobs/:id/assign
+        if path.startswith("/api/jobs/") and path.endswith("/assign"):
+            job_id = path[len("/api/jobs/"):-len("/assign")].rstrip("/")
+            if not job_id:
+                self.send_error(404)
+                return
+            supabase = _get_supabase()
+            if not supabase:
+                self.send_json({"error": "Supabase not configured"}, 503)
+                return
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            driver_id = payload.get("driver_id")
+            if not driver_id:
+                self.send_json({"error": "driver_id required"}, 400)
+                return
+            try:
+                from backend.jobs import assign_driver
+                job, err = assign_driver(supabase, job_id, str(driver_id))
+                if err:
+                    code = err.get("code", "VALIDATION_FAILED")
+                    status = 409 if code == "VALIDATION_FAILED" else 422
+                    self.send_json({"error": err.get("error", "Assignment not allowed"), "reasons": err.get("reasons", [])}, status)
+                    return
+                self.send_json(job)
+            except Exception as e:
+                log("assign_driver error: %s" % e)
+                self.send_json({"error": str(e)[:200]}, 500)
+            return
         self.send_error(404)
-
-    def _handle_batch_locations(self):
-        """Idempotent batch location insert. Plan 8.1-8.2."""
-        if not is_configured():
-            self.send_json({"error": "Supabase not configured"}, 503)
-            return
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            self.send_json({"error": "Invalid JSON"}, 400)
-            return
-        driver_id = payload.get("driver_id")
-        events = payload.get("events") or []
-        if not driver_id or not isinstance(events, list):
-            self.send_json({"error": "driver_id and events[] required"}, 400)
-            return
-        try:
-            from backend.location_batch import batch_location_events
-            client = get_client()
-            accepted, errs = batch_location_events(client, str(driver_id), events)
-            self.send_json({"accepted": accepted, "errors": errs})
-        except Exception as e:
-            log("batch locations error: %s" % e)
-            self.send_json({"error": str(e)[:200]}, 500)
 
 
 def main():

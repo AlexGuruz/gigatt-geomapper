@@ -34,6 +34,14 @@
   let zoneCenterMarker = null;
   let lastUpdated = null;
   let endpointMarkers = [];
+  let selectedDriverId = null;
+  let driverMarkers = [];
+  const DRIVER_POLL_MS = 8000;
+  let jobs = [];
+  let permitCandidates = [];
+  let driverRoutePolyline = null;
+  let driverRouteMarkers = [];
+  let driverJobSummaryEl = null;
 
   function fetchWithTimeout(url, options, timeoutMs) {
     timeoutMs = timeoutMs || FETCH_TIMEOUT_MS;
@@ -74,6 +82,79 @@
       return r.json();
     });
   }
+
+  /** Turn API/network errors into short, user-friendly messages. */
+  function friendlyError(err) {
+    if (!err || !err.message) return 'Something went wrong. Please try again.';
+    var msg = String(err.message);
+    if (msg.indexOf('Server 403') !== -1) return 'You don\'t have permission to do that.';
+    if (msg.indexOf('Server 404') !== -1) return 'That item was not found. It may have been removed.';
+    if (msg.indexOf('Server 500') !== -1 || msg.indexOf('Server 503') !== -1) return 'Server error. Please try again in a moment.';
+    if (msg.indexOf('AbortError') !== -1 || msg.indexOf('Failed to fetch') !== -1 || msg.indexOf('NetworkError') !== -1) return 'Connection problem. Check your network and try again.';
+    return msg.length > 80 ? msg.slice(0, 77) + '…' : msg;
+  }
+
+  function postJson(path, body) {
+    return fetchWithTimeout(API_BASE + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(function (r) {
+      if (!r.ok) throw new Error('Server ' + r.status);
+      return r.json();
+    });
+  }
+
+  function authHeaders() {
+    return window.GeomapperAuth && window.GeomapperAuth.getToken
+      ? window.GeomapperAuth.getToken().then(function (token) {
+          var h = { 'Content-Type': 'application/json' };
+          if (token) h['Authorization'] = 'Bearer ' + token;
+          return h;
+        })
+      : Promise.resolve({});
+  }
+
+  function getWithAuth(path) {
+    return authHeaders().then(function (headers) {
+      var opt = { headers: headers };
+      if (headers['Content-Type'] === undefined) opt.headers = Object.assign({}, headers, { 'Content-Type': 'application/json' });
+      return fetchWithTimeout(API_BASE + path, opt).then(function (r) {
+        if (!r.ok) throw new Error('Server ' + r.status);
+        return r.json();
+      });
+    });
+  }
+
+  function patchWithAuth(path, body) {
+    return authHeaders().then(function (headers) {
+      headers['Content-Type'] = 'application/json';
+      return fetchWithTimeout(API_BASE + path, {
+        method: 'PATCH',
+        headers: headers,
+        body: JSON.stringify(body),
+      }).then(function (r) {
+        if (!r.ok) throw new Error('Server ' + r.status);
+        return r.json();
+      });
+    });
+  }
+
+  function putWithAuth(path, body) {
+    return authHeaders().then(function (headers) {
+      headers['Content-Type'] = 'application/json';
+      return fetchWithTimeout(API_BASE + path, {
+        method: 'PUT',
+        headers: headers,
+        body: JSON.stringify(body),
+      }).then(function (r) {
+        if (!r.ok) throw new Error('Server ' + r.status);
+        return r.json();
+      });
+    });
+  }
+
+  var currentUser = null;
 
   function initMap() {
     get('/api/config').then(function (config) {
@@ -256,6 +337,492 @@
       }
     }
     updateEndpointMarkers();
+  }
+
+  function getDriverFreshness(driver) {
+    var seen = driver.last_seen_at || driver.timestamp;
+    if (!seen) return 'off';
+    var t = new Date(seen).getTime();
+    if (isNaN(t)) return 'off';
+    var minAgo = (Date.now() - t) / (60 * 1000);
+    if (minAgo < 5) return 'fresh';
+    if (minAgo < 30) return 'stale';
+    return 'off';
+  }
+
+  function updateDriverMarkers() {
+    if (!map || !window.google) return;
+    driverMarkers.forEach(function (m) {
+      m.setMap(null);
+    });
+    driverMarkers = [];
+    var driverIcon = {
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: 8,
+      fillColor: '#58a6ff',
+      fillOpacity: 0.9,
+      strokeColor: '#1a3646',
+      strokeWeight: 2,
+    };
+    drivers.forEach(function (d) {
+      var lat = d.lat != null ? Number(d.lat) : (d.lat_lng && d.lat_lng.lat);
+      var lng = d.lng != null ? Number(d.lng) : (d.lat_lng && d.lat_lng.lng);
+      if (typeof lat !== 'number' || typeof lng !== 'number' || !isFinite(lat) || !isFinite(lng)) return;
+      var m = new google.maps.Marker({
+        position: { lat: lat, lng: lng },
+        map: map,
+        icon: driverIcon,
+        title: d.name || d.email || 'Driver',
+      });
+      m.driver = d;
+      m.addListener('click', function () {
+        focusDriver(d);
+      });
+      driverMarkers.push(m);
+    });
+  }
+
+  function formatJobEta(isoStr) {
+    if (!isoStr) return '—';
+    var d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function formatJobAvail(isoStr) {
+    if (!isoStr) return '—';
+    var d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function renderDriverList() {
+    var el = document.getElementById('driverList');
+    if (!el) return;
+    if (!drivers.length) {
+      el.innerHTML = '<p class="empty-state">No drivers</p>';
+      return;
+    }
+    el.innerHTML = '';
+    drivers.forEach(function (d) {
+      var card = document.createElement('div');
+      card.className = 'driver-card' + (selectedDriverId === (d.id || d.user_id) ? ' selected' : '');
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      var freshness = getDriverFreshness(d);
+      var name = (d.name && d.name.trim()) || d.email || 'Driver';
+      var status = (d.status || 'off_duty').replace('_', ' ');
+      var html = '<span class="driver-freshness ' + freshness + '" aria-hidden="true"></span>' +
+        '<div class="driver-name">' + escapeHtml(name) + '</div>' +
+        '<div class="driver-meta">' + escapeHtml(status) + '</div>';
+      var job = d.assigned_job;
+      if (job) {
+        html += '<div class="driver-assigned-job">';
+        html += '<div class="driver-job-route">' + escapeHtml((job.origin || '') + ' \u2192 ' + (job.destination || '')) + '</div>';
+        html += '<div class="driver-job-meta">ETA ' + formatJobEta(job.projected_completion) + ' \u00B7 ' + (job.estimated_miles || '—') + ' mi</div>';
+        html += '<div class="driver-job-meta">Avail. ' + formatJobAvail(job.projected_available_at) + '</div>';
+        if (job.projected_available_location && job.projected_available_location.address) {
+          html += '<div class="driver-job-meta">Next: ' + escapeHtml(job.projected_available_location.address) + '</div>';
+        }
+        html += '</div>';
+      }
+      card.innerHTML = html;
+      card.addEventListener('click', function () {
+        focusDriver(d);
+      });
+      el.appendChild(card);
+    });
+  }
+
+  function renderPermitCandidates() {
+    var el = document.getElementById('permitCandidatesList');
+    if (!el) return;
+    var needReview = permitCandidates.filter(function (c) { return (c.review_status || '') === 'needs_review' || (c.review_status || '') === 'insufficient_data'; });
+    var approved = permitCandidates.filter(function (c) { return (c.review_status || '') === 'approved'; });
+    var list = needReview.concat(approved);
+    if (!list.length) {
+      el.innerHTML = '<p class="empty-state">No permits to review</p>';
+      return;
+    }
+    el.innerHTML = '';
+    list.forEach(function (c) {
+      var card = document.createElement('div');
+      card.className = 'job-card permit-candidate-card';
+      var routeLine = (c.origin_text || '') + ' \u2192 ' + (c.destination_text || '');
+      if (!routeLine.trim() || routeLine === ' \u2192 ') routeLine = 'No origin/destination';
+      var status = (c.review_status || '').replace('_', ' ');
+      card.innerHTML = '<div class="job-card-route">' + escapeHtml(routeLine) + '</div>' +
+        '<div class="job-card-meta">' + (c.estimated_miles || '—') + ' mi \u00B7 ' + escapeHtml(status) + '</div>' +
+        '<button type="button" class="permit-review-btn">Review</button>';
+      card.querySelector('.permit-review-btn').addEventListener('click', function (e) {
+        e.stopPropagation();
+        openReviewPermitModal(c);
+      });
+      el.appendChild(card);
+    });
+  }
+
+  function openReviewPermitModal(candidate) {
+    var modal = document.getElementById('reviewPermitModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'reviewPermitModal';
+      modal.className = 'modal-overlay';
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-label', 'Review permit');
+      modal.innerHTML = '<div class="modal-content modal-review"><h3>Review permit</h3><div class="review-fields"></div><div class="review-actions"></div><button type="button" class="modal-close">Close</button></div>';
+      document.body.appendChild(modal);
+      modal.querySelector('.modal-close').addEventListener('click', function () { modal.classList.remove('open'); });
+      modal.addEventListener('click', function (e) { if (e.target === modal) modal.classList.remove('open'); });
+    }
+    var fields = modal.querySelector('.review-fields');
+    var actions = modal.querySelector('.review-actions');
+    fields.innerHTML = '<label>Origin <input type="text" id="reviewOrigin" class="review-input"></label>' +
+      '<label>Destination <input type="text" id="reviewDest" class="review-input"></label>' +
+      '<label>Miles <input type="number" id="reviewMiles" class="review-input" min="0"></label>' +
+      '<label>Duration (min) <input type="number" id="reviewDuration" class="review-input" min="0"></label>';
+    document.getElementById('reviewOrigin').value = candidate.origin_text || '';
+    document.getElementById('reviewDest').value = candidate.destination_text || '';
+    document.getElementById('reviewMiles').value = candidate.estimated_miles != null ? candidate.estimated_miles : '';
+    document.getElementById('reviewDuration').value = candidate.estimated_duration_minutes != null ? candidate.estimated_duration_minutes : '';
+    actions.innerHTML = '';
+    if (candidate.review_status !== 'approved' && candidate.review_status !== 'rejected') {
+      var approveBtn = document.createElement('button');
+      approveBtn.type = 'button';
+      approveBtn.className = 'candidate-assign-btn';
+      approveBtn.textContent = 'Approve';
+      approveBtn.addEventListener('click', function () {
+        var payload = getReviewFieldsPayload();
+        patch('/api/permit-candidates/' + encodeURIComponent(candidate.id), payload).then(function () {
+          return postJson('/api/permit-candidates/' + encodeURIComponent(candidate.id) + '/approve');
+        }).then(function () {
+          modal.classList.remove('open');
+          get('/api/permit-candidates').then(function (r) { permitCandidates = r || []; renderPermitCandidates(); });
+        }).catch(function (err) { alert(friendlyError(err)); });
+      });
+      actions.appendChild(approveBtn);
+      var rejectBtn = document.createElement('button');
+      rejectBtn.type = 'button';
+      rejectBtn.className = 'modal-close';
+      rejectBtn.textContent = 'Reject';
+      rejectBtn.style.marginLeft = '0.5rem';
+      rejectBtn.addEventListener('click', function () {
+        postJson('/api/permit-candidates/' + encodeURIComponent(candidate.id) + '/reject').then(function () {
+          modal.classList.remove('open');
+          get('/api/permit-candidates').then(function (r) { permitCandidates = r || []; renderPermitCandidates(); });
+        }).catch(function (err) { alert(friendlyError(err)); });
+      });
+      actions.appendChild(rejectBtn);
+    }
+    if (candidate.review_status === 'approved') {
+      var createJobBtn = document.createElement('button');
+      createJobBtn.type = 'button';
+      createJobBtn.className = 'candidate-assign-btn';
+      createJobBtn.textContent = 'Create job';
+      createJobBtn.addEventListener('click', function () {
+        var payload = getReviewFieldsPayload();
+        patch('/api/permit-candidates/' + encodeURIComponent(candidate.id), payload).then(function () {
+          return postJson('/api/permit-candidates/' + encodeURIComponent(candidate.id) + '/create-job');
+        }).then(function (job) {
+          modal.classList.remove('open');
+          get('/api/jobs').then(function (j) { jobs = j || []; renderUnassignedJobs(); });
+          get('/api/permit-candidates').then(function (r) { permitCandidates = r || []; renderPermitCandidates(); });
+        }).catch(function (err) { alert(friendlyError(err)); });
+      });
+      actions.appendChild(createJobBtn);
+    }
+    modal.classList.add('open');
+  }
+
+  function getReviewFieldsPayload() {
+    var originEl = document.getElementById('reviewOrigin');
+    var destEl = document.getElementById('reviewDest');
+    var milesEl = document.getElementById('reviewMiles');
+    var durationEl = document.getElementById('reviewDuration');
+    var payload = {};
+    if (originEl) payload.origin_text = originEl.value;
+    if (destEl) payload.destination_text = destEl.value;
+    if (milesEl && milesEl.value !== '') payload.estimated_miles = parseInt(milesEl.value, 10);
+    if (durationEl && durationEl.value !== '') payload.estimated_duration_minutes = parseInt(durationEl.value, 10);
+    return payload;
+  }
+
+  function renderJobsNearDriverSelect() {
+    var sel = document.getElementById('jobsNearDriverSelect');
+    if (!sel) return;
+    var first = sel.options[0];
+    sel.innerHTML = '';
+    if (first) sel.appendChild(first);
+    (drivers || []).forEach(function (d) {
+      var opt = document.createElement('option');
+      opt.value = d.id || d.user_id || '';
+      var name = (d.name && d.name.trim()) || d.email || 'Driver';
+      opt.textContent = name;
+      sel.appendChild(opt);
+    });
+  }
+
+  function showJobsNearDriver() {
+    var sel = document.getElementById('jobsNearDriverSelect');
+    var minEl = document.getElementById('jobsNearMinMi');
+    var maxEl = document.getElementById('jobsNearMaxMi');
+    var listEl = document.getElementById('jobsNearList');
+    if (!sel || !listEl) return;
+    var driverId = (sel.value || '').trim();
+    if (!driverId) {
+      listEl.innerHTML = '<p class="empty-state">Select a driver first.</p>';
+      return;
+    }
+    var driver = (drivers || []).filter(function (d) { return (d.id || d.user_id) === driverId; })[0];
+    var minMi = (minEl && minEl.value !== '') ? parseInt(minEl.value, 10) : 150;
+    var maxMi = (maxEl && maxEl.value !== '') ? parseInt(maxEl.value, 10) : 300;
+    if (isNaN(minMi)) minMi = 150;
+    if (isNaN(maxMi)) maxMi = 300;
+    function doFetch(nearLat, nearLng) {
+      var q = 'status=unassigned&near_lat=' + encodeURIComponent(nearLat) + '&near_lng=' + encodeURIComponent(nearLng) + '&min_mi=' + encodeURIComponent(minMi) + '&max_mi=' + encodeURIComponent(maxMi);
+      get('/api/jobs?' + q).then(function (jobList) {
+        if (!Array.isArray(jobList)) jobList = [];
+        listEl.innerHTML = '';
+        if (jobList.length === 0) {
+          listEl.innerHTML = '<p class="empty-state">No unassigned jobs in that range (jobs need origin_lat/lng).</p>';
+          return;
+        }
+        jobList.forEach(function (job) {
+          var card = document.createElement('div');
+          card.className = 'job-card job-card-unassigned';
+          var routeLine = (job.origin || '') + ' \u2192 ' + (job.destination || '');
+          var meta = (job.estimated_miles || '—') + ' mi';
+          if (typeof job.distance_mi === 'number') meta += ' \u00B7 ' + job.distance_mi + ' mi from next location';
+          card.innerHTML = '<div class="job-card-route">' + escapeHtml(routeLine) + '</div><div class="job-card-meta">' + escapeHtml(meta) + '</div><button type="button" class="job-card-assign-btn">Assign driver</button>';
+          var btn = card.querySelector('.job-card-assign-btn');
+          if (btn) btn.addEventListener('click', function (e) { e.stopPropagation(); openAssignDriverModal(job); });
+          listEl.appendChild(card);
+        });
+      }).catch(function () {
+        listEl.innerHTML = '<p class="empty-state">Failed to load jobs.</p>';
+      });
+    }
+    var loc = driver && driver.assigned_job && driver.assigned_job.projected_available_location;
+    var lat = loc && (loc.lat != null) ? Number(loc.lat) : null;
+    var lng = loc && (loc.lng != null) ? Number(loc.lng) : null;
+    if (typeof lat === 'number' && typeof lng === 'number' && isFinite(lat) && isFinite(lng)) {
+      doFetch(lat, lng);
+      return;
+    }
+    var addr = loc && (loc.address || '').trim();
+    if (!addr && driver && (driver.lat != null && driver.lng != null)) {
+      doFetch(Number(driver.lat), Number(driver.lng));
+      return;
+    }
+    if (!addr) addr = (driver && driver.assigned_job && driver.assigned_job.destination) ? driver.assigned_job.destination : '';
+    if (!addr) {
+      listEl.innerHTML = '<p class="empty-state">Driver has no next location (assign a job or use current location).</p>';
+      return;
+    }
+    if (!window.google || !window.google.maps || !window.google.maps.Geocoder) {
+      listEl.innerHTML = '<p class="empty-state">Geocoder not available.</p>';
+      return;
+    }
+    listEl.innerHTML = '<p class="empty-state">Geocoding…</p>';
+    var geocoder = new google.maps.Geocoder();
+    geocoder.geocode({ address: addr }, function (results, status) {
+      if (status === google.maps.GeocoderStatus.OK && results && results[0] && results[0].geometry) {
+        var loc2 = results[0].geometry.location;
+        doFetch(loc2.lat(), loc2.lng());
+      } else {
+        listEl.innerHTML = '<p class="empty-state">Could not geocode address. Use a driver with current location.</p>';
+      }
+    });
+  }
+
+  function renderUnassignedJobs() {
+    var el = document.getElementById('unassignedJobsList');
+    if (!el) return;
+    var unassigned = (jobs || []).filter(function (j) { return (j.status || '') === 'unassigned'; });
+    if (!unassigned.length) {
+      el.innerHTML = '<p class="empty-state">No unassigned jobs</p>';
+      return;
+    }
+    el.innerHTML = '';
+    unassigned.forEach(function (job) {
+      var card = document.createElement('div');
+      card.className = 'job-card job-card-unassigned';
+      var routeLine = (job.origin || '') + ' \u2192 ' + (job.destination || '');
+      card.innerHTML = '<div class="job-card-route">' + escapeHtml(routeLine) + '</div>' +
+        '<div class="job-card-meta">' + (job.estimated_miles || '—') + ' mi</div>' +
+        '<button type="button" class="job-card-assign-btn">Assign driver</button>';
+      var btn = card.querySelector('.job-card-assign-btn');
+      if (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          openAssignDriverModal(job);
+        });
+      }
+      el.appendChild(card);
+    });
+  }
+
+  function openAssignDriverModal(job) {
+    get('/api/jobs/' + encodeURIComponent(job.id) + '/candidate-drivers').then(function (data) {
+      var candidates = data.candidates || [];
+      var modal = document.getElementById('assignDriverModal');
+      if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'assignDriverModal';
+        modal.className = 'modal-overlay';
+        modal.setAttribute('role', 'dialog');
+        modal.setAttribute('aria-label', 'Assign driver');
+        modal.innerHTML = '<div class="modal-content"><h3>Assign driver</h3><p class="modal-job-route"></p><div class="modal-candidates"></div><button type="button" class="modal-close">Close</button></div>';
+        document.body.appendChild(modal);
+        modal.querySelector('.modal-close').addEventListener('click', function () {
+          modal.classList.remove('open');
+        });
+        modal.addEventListener('click', function (e) {
+          if (e.target === modal) modal.classList.remove('open');
+        });
+      }
+      modal.querySelector('.modal-job-route').textContent = (job.origin || '') + ' \u2192 ' + (job.destination || '');
+      var list = modal.querySelector('.modal-candidates');
+      list.innerHTML = '';
+      candidates.forEach(function (c) {
+        var d = c.driver || {};
+        var row = document.createElement('div');
+        row.className = 'modal-candidate' + (c.allowed ? '' : ' blocked');
+        var name = (d.name && d.name.trim()) || d.email || 'Driver';
+        var badge = c.allowed ? 'Eligible' : ('Blocked: ' + (c.reasons && c.reasons.length ? c.reasons.map(function (r) { return r.message; }).join('; ') : ''));
+        row.innerHTML = '<span class="candidate-name">' + escapeHtml(name) + '</span> <span class="candidate-badge">' + escapeHtml(badge) + '</span>';
+        if (c.allowed) {
+          var assignBtn = document.createElement('button');
+          assignBtn.type = 'button';
+          assignBtn.className = 'candidate-assign-btn';
+          assignBtn.textContent = 'Assign';
+          assignBtn.addEventListener('click', function () {
+            fetchWithTimeout(API_BASE + '/api/jobs/' + encodeURIComponent(job.id) + '/assign', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ driver_id: d.id }),
+            }).then(function (r) {
+              return r.json().then(function (body) {
+                if (r.ok) {
+                  modal.classList.remove('open');
+                  get('/api/jobs').then(function (j) { jobs = j || []; renderUnassignedJobs(); });
+                  get('/api/drivers').then(function (dr) { drivers = dr || []; renderDriverList(); updateDriverMarkers(); });
+                } else {
+                  var msg = body.error || ('Server ' + r.status);
+                  if (body.reasons && body.reasons.length) {
+                    msg += '\n' + body.reasons.map(function (x) { return x.message; }).join('\n');
+                  }
+                  alert('Assign failed: ' + msg);
+                }
+              });
+            }).catch(function (err) {
+              alert('Assign failed: ' + (err && err.message ? err.message : 'Unknown error'));
+            });
+          });
+          row.appendChild(assignBtn);
+        }
+        list.appendChild(row);
+      });
+      modal.classList.add('open');
+    }).catch(function () {
+      alert('Could not load drivers');
+    });
+  }
+
+  function clearDriverRoute() {
+    if (driverRoutePolyline) {
+      driverRoutePolyline.setMap(null);
+      driverRoutePolyline = null;
+    }
+    driverRouteMarkers.forEach(function (m) { if (m && m.setMap) m.setMap(null); });
+    driverRouteMarkers = [];
+    if (driverJobSummaryEl) {
+      driverJobSummaryEl.style.display = 'none';
+      driverJobSummaryEl.textContent = '';
+    }
+  }
+
+  function focusDriver(driver) {
+    deselectRoute();
+    clearDriverRoute();
+    selectedDriverId = driver.id || driver.user_id || null;
+    renderDriverList();
+    var lat = driver.lat != null ? Number(driver.lat) : (driver.lat_lng && driver.lat_lng.lat);
+    var lng = driver.lng != null ? Number(driver.lng) : (driver.lat_lng && driver.lat_lng.lng);
+    if (map && typeof lat === 'number' && typeof lng === 'number' && isFinite(lat) && isFinite(lng)) {
+      map.panTo({ lat: lat, lng: lng });
+      map.setZoom(Math.max(map.getZoom(), 10));
+    }
+    var job = driver.assigned_job;
+    if (!job || !map || !window.google) return;
+    var originAddr = (job.origin || '').trim();
+    var destAddr = (job.destination || '').trim();
+    if (!originAddr || !destAddr) return;
+    if (!driverJobSummaryEl) {
+      driverJobSummaryEl = document.getElementById('driverJobSummary');
+      if (!driverJobSummaryEl) {
+        driverJobSummaryEl = document.createElement('div');
+        driverJobSummaryEl.id = 'driverJobSummary';
+        driverJobSummaryEl.className = 'driver-job-summary';
+        var rightHeader = document.querySelector('.right-sidebar-header');
+        if (rightHeader && rightHeader.nextSibling) {
+          rightHeader.parentNode.insertBefore(driverJobSummaryEl, rightHeader.nextSibling);
+        } else {
+          document.getElementById('driverList').parentNode.insertBefore(driverJobSummaryEl, document.getElementById('driverList'));
+        }
+      }
+    }
+    driverJobSummaryEl.innerHTML = '<div class="driver-job-summary-title">Assigned job</div>' +
+      '<div class="driver-job-summary-route">' + escapeHtml(originAddr + ' \u2192 ' + destAddr) + '</div>' +
+      '<div class="driver-job-summary-meta">ETA ' + formatJobEta(job.projected_completion) + ' \u00B7 ' + (job.estimated_miles || '—') + ' mi \u00B7 Avail. ' + formatJobAvail(job.projected_available_at) + '</div>';
+    driverJobSummaryEl.style.display = 'block';
+    var geocoder = new google.maps.Geocoder();
+    function geocode(addr, cb) {
+      if (!addr) { cb(null); return; }
+      geocoder.geocode({ address: addr }, function (results, status) {
+        if (status === google.maps.GeocoderStatus.OK && results && results[0] && results[0].geometry) {
+          var loc = results[0].geometry.location;
+          cb({ lat: loc.lat(), lng: loc.lng() });
+        } else { cb(null); }
+      });
+    }
+    geocode(originAddr, function (originLatLng) {
+      geocode(destAddr, function (destLatLng) {
+        if (!originLatLng || !destLatLng) return;
+        var startIcon = { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: '#2ea043', fillOpacity: 0.9, strokeColor: '#1a3646', strokeWeight: 1 };
+        var stopIcon = { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: '#f85149', fillOpacity: 0.9, strokeColor: '#1a3646', strokeWeight: 1 };
+        driverRouteMarkers.push(new google.maps.Marker({ position: originLatLng, map: map, icon: startIcon, title: job.origin }));
+        driverRouteMarkers.push(new google.maps.Marker({ position: destLatLng, map: map, icon: stopIcon, title: job.destination }));
+        if (!directionsService) directionsService = new google.maps.DirectionsService();
+        directionsService.route({
+          origin: originLatLng,
+          destination: destLatLng,
+          travelMode: google.maps.TravelMode.DRIVING,
+        }, function (result, status) {
+          if (status === google.maps.DirectionsStatus.OK && result.routes && result.routes[0]) {
+            var r = result.routes[0];
+            var path = r.overview_path || [];
+            if (path.length === 0 && r.legs && r.legs[0]) {
+              r.legs[0].steps.forEach(function (step) { path = path.concat(step.path); });
+            }
+            if (path.length > 0) {
+              driverRoutePolyline = new google.maps.Polyline({
+                path: path,
+                geodesic: true,
+                strokeColor: '#58a6ff',
+                strokeOpacity: 0.9,
+                strokeWeight: 4,
+                map: map,
+              });
+              var bounds = new google.maps.LatLngBounds();
+              path.forEach(function (p) { bounds.extend(p); });
+              if (typeof lat === 'number' && typeof lng === 'number') bounds.extend({ lat: lat, lng: lng });
+              fitBoundsWithMaxZoom(bounds, 80, 12);
+            }
+          }
+        });
+      });
+    });
   }
 
   function updateEndpointMarkers() {
@@ -465,7 +1032,10 @@
 
   function deselectRoute() {
     selectedRouteId = null;
+    selectedDriverId = null;
     clearFocus();
+    clearDriverRoute();
+    renderDriverList();
     renderCards();
   }
 
@@ -504,6 +1074,8 @@
 
   function focusRoute(route) {
     clearFocus();
+    selectedDriverId = null;
+    renderDriverList();
     if (!route || !map || !window.google) return;
     var originLat = route.origin_lat;
     var originLng = route.origin_lng;
@@ -655,12 +1227,174 @@
     return div.innerHTML;
   }
 
+  var adminUsers = [];
+  var adminStatePerms = [];
+  var adminConfig = {};
+
+  function initAdmin() {
+    var section = document.getElementById('adminSection');
+    if (!section) return;
+    section.style.display = 'block';
+    var tabs = section.querySelectorAll('.admin-tab');
+    var panels = section.querySelectorAll('.admin-panel');
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        var t = tab.getAttribute('data-tab');
+        tabs.forEach(function (x) { x.classList.remove('active'); });
+        panels.forEach(function (p) { p.style.display = 'none'; });
+        tab.classList.add('active');
+        if (t === 'users') {
+          document.getElementById('adminUsersPanel').style.display = 'block';
+          loadAdminUsers();
+        } else if (t === 'state-permissions') {
+          document.getElementById('adminStatePanel').style.display = 'block';
+          renderAdminDriverSelect();
+          var sel = document.getElementById('adminDriverSelect');
+          if (sel) sel.addEventListener('change', function () { loadAdminStatePerms(sel.value); });
+          loadAdminStatePerms(sel && sel.value);
+        } else if (t === 'config') {
+          document.getElementById('adminConfigPanel').style.display = 'block';
+          loadAdminConfig();
+        }
+      });
+    });
+    document.getElementById('adminStatePermsSave').addEventListener('click', saveAdminStatePerms);
+    document.getElementById('adminConfigSave').addEventListener('click', saveAdminConfig);
+    loadAdminUsers();
+  }
+
+  function loadAdminUsers() {
+    getWithAuth('/api/admin/users').then(function (list) {
+      adminUsers = list || [];
+      var el = document.getElementById('adminUsersList');
+      if (!el) return;
+      if (!adminUsers.length) { el.innerHTML = '<p class="empty-state">No users</p>'; return; }
+      el.innerHTML = '';
+      adminUsers.forEach(function (u) {
+        var row = document.createElement('div');
+        row.className = 'admin-user-row';
+        var roleSel = '<select class="admin-user-role" data-id="' + escapeHtml(u.id) + '">' +
+          '<option value="driver"' + (u.role === 'driver' ? ' selected' : '') + '>Driver</option>' +
+          '<option value="dispatcher"' + (u.role === 'dispatcher' ? ' selected' : '') + '>Dispatcher</option>' +
+          '<option value="admin"' + (u.role === 'admin' ? ' selected' : '') + '>Admin</option></select>';
+        var activeChk = '<input type="checkbox" class="admin-user-active" data-id="' + escapeHtml(u.id) + '"' + (u.active !== false ? ' checked' : '') + '> Active';
+        row.innerHTML = '<div class="admin-user-email">' + escapeHtml(u.email || u.id) + '</div><div class="admin-user-edit">' + roleSel + ' ' + activeChk + '</div>';
+        el.appendChild(row);
+      });
+      el.querySelectorAll('.admin-user-role').forEach(function (sel) {
+        sel.addEventListener('change', function () {
+          var id = sel.getAttribute('data-id');
+          patchWithAuth('/api/admin/users/' + encodeURIComponent(id), { role: sel.value }).then(function () { loadAdminUsers(); }).catch(function (e) { alert(e.message || 'Failed'); });
+        });
+      });
+      el.querySelectorAll('.admin-user-active').forEach(function (chk) {
+        chk.addEventListener('change', function () {
+          var id = chk.getAttribute('data-id');
+          patchWithAuth('/api/admin/users/' + encodeURIComponent(id), { active: chk.checked }).then(function () { loadAdminUsers(); }).catch(function (e) { alert(e.message || 'Failed'); });
+        });
+      });
+    }).catch(function (e) {
+      var el = document.getElementById('adminUsersList');
+      if (el) el.innerHTML = '<p class="empty-state">Failed to load users</p>';
+    });
+  }
+
+  function renderAdminDriverSelect() {
+    var sel = document.getElementById('adminDriverSelect');
+    if (!sel) return;
+    var first = sel.options[0];
+    sel.innerHTML = first ? first.outerHTML : '';
+    (drivers || []).forEach(function (d) {
+      var opt = document.createElement('option');
+      opt.value = d.id || d.user_id || '';
+      opt.textContent = (d.name && d.name.trim()) || d.email || 'Driver';
+      sel.appendChild(opt);
+    });
+  }
+
+  function loadAdminStatePerms(driverId) {
+    if (!driverId) {
+      document.getElementById('adminStatePermsList').innerHTML = '<p class="empty-state">Select a driver</p>';
+      return;
+    }
+    getWithAuth('/api/admin/drivers/' + encodeURIComponent(driverId) + '/state-permissions').then(function (list) {
+      adminStatePerms = list || [];
+      var el = document.getElementById('adminStatePermsList');
+      var states = ['AL','AR','AZ','CA','CO','FL','GA','IA','IL','IN','KS','KY','LA','MO','MS','NE','NM','OK','TN','TX','UT','WV','WY'];
+      el.innerHTML = '';
+      states.forEach(function (sc) {
+        var rec = adminStatePerms.find(function (p) { return (p.state_code || '').trim().toUpperCase() === sc; });
+        var allowed = rec ? rec.allowed !== false : false;
+        var label = document.createElement('label');
+        label.className = 'admin-state-check';
+        label.innerHTML = '<input type="checkbox" data-state="' + sc + '"' + (allowed ? ' checked' : '') + '> ' + sc;
+        el.appendChild(label);
+      });
+    }).catch(function () {
+      document.getElementById('adminStatePermsList').innerHTML = '<p class="empty-state">Failed to load</p>';
+    });
+  }
+
+  function saveAdminStatePerms() {
+    var sel = document.getElementById('adminDriverSelect');
+    var driverId = (sel && sel.value) || '';
+    if (!driverId) { alert('Select a driver'); return; }
+    var list = document.getElementById('adminStatePermsList');
+    var permissions = [];
+    if (list) list.querySelectorAll('input[type=checkbox][data-state]').forEach(function (chk) {
+      if (chk.checked) permissions.push({ state_code: chk.getAttribute('data-state'), allowed: true });
+    });
+    putWithAuth('/api/admin/drivers/' + encodeURIComponent(driverId) + '/state-permissions', { permissions: permissions }).then(function () {
+      loadAdminStatePerms(driverId);
+    }).catch(function (e) { alert(e.message || 'Failed'); });
+  }
+
+  function loadAdminConfig() {
+    getWithAuth('/api/admin/config').then(function (cfg) {
+      adminConfig = cfg || {};
+      var el = document.getElementById('adminConfigList');
+      el.innerHTML = '';
+      var keys = ['dispatch_day_cutoff_time', 'dispatch_next_day_start_time', 'availability_buffer_minutes'];
+      keys.forEach(function (k) {
+        var v = adminConfig[k];
+        if (typeof v === 'string' && v.length >= 2 && v[0] === '"') v = v.slice(1, -1);
+        var row = document.createElement('div');
+        row.className = 'admin-config-row';
+        row.innerHTML = '<label>' + escapeHtml(k) + '</label><input type="text" class="admin-config-value" data-key="' + escapeHtml(k) + '" value="' + escapeHtml(String(v != null ? v : '')) + '">';
+        el.appendChild(row);
+      });
+    }).catch(function () {
+      document.getElementById('adminConfigList').innerHTML = '<p class="empty-state">Failed to load config</p>';
+    });
+  }
+
+  function saveAdminConfig() {
+    var updates = {};
+    document.querySelectorAll('.admin-config-value').forEach(function (inp) {
+      var k = inp.getAttribute('data-key');
+      if (k) updates[k] = inp.value;
+    });
+    patchWithAuth('/api/admin/config', { updates: updates }).then(function () {
+      loadAdminConfig();
+    }).catch(function (e) { alert(e.message || 'Failed'); });
+  }
+
   function loadData() {
-    Promise.all([get('/api/routes'), get('/api/drivers')]).then(function (results) {
+    Promise.all([
+      get('/api/routes'),
+      get('/api/drivers'),
+      get('/api/jobs').catch(function () { return []; }),
+      get('/api/permit-candidates').catch(function () { return []; }),
+      getWithAuth('/api/me').catch(function () { return null; })
+    ]).then(function (results) {
       routes = results[0] || [];
       drivers = results[1] || [];
+      jobs = results[2] || [];
+      permitCandidates = results[3] || [];
+      currentUser = results[4] || null;
       lastUpdated = new Date();
       updateLastUpdatedLabel();
+      if (currentUser && currentUser.role === 'admin') initAdmin();
       document.getElementById('timeFilter').addEventListener('change', renderCards);
       document.getElementById('routeTypeFilter').addEventListener('change', renderCards);
       var locationFilterEl = document.getElementById('locationFilter');
@@ -669,10 +1403,58 @@
       if (refreshBtn) refreshBtn.addEventListener('click', refreshRoutes);
       var clearRouteBtn = document.getElementById('clearRouteBtn');
       if (clearRouteBtn) clearRouteBtn.addEventListener('click', deselectRoute);
+      var uploadBtn = document.getElementById('uploadPermitBtn');
+      var uploadInput = document.getElementById('uploadPermitInput');
+      if (uploadBtn && uploadInput) {
+        uploadBtn.addEventListener('click', function () { uploadInput.click(); });
+        uploadInput.addEventListener('change', function () {
+          var file = uploadInput.files && uploadInput.files[0];
+          if (!file) return;
+          var fd = new FormData();
+          fd.append('file', file);
+          fd.append('source_type', 'manual_upload');
+          fetch(API_BASE + '/api/ingestion-documents', { method: 'POST', body: fd }).then(function (r) {
+            if (!r.ok) return r.json().then(function (b) { throw new Error(b.error || r.status); });
+            return r.json();
+          }).then(function (doc) {
+            return fetch(API_BASE + '/api/ingestion-documents/' + encodeURIComponent(doc.id) + '/parse', { method: 'POST' }).then(function (r2) {
+              if (!r2.ok) throw new Error('Parse failed');
+              return r2.json();
+            });
+          }).then(function () {
+            uploadInput.value = '';
+            get('/api/permit-candidates').then(function (r) { permitCandidates = r || []; renderPermitCandidates(); });
+          }).catch(function (err) { alert('Upload/parse failed: ' + (err && err.message ? err.message : err)); });
+        });
+      }
       renderCards();
+      renderPermitCandidates();
+      renderJobsNearDriverSelect();
+      renderUnassignedJobs();
+      renderDriverList();
+      updateDriverMarkers();
+      var jobsNearShowBtn = document.getElementById('jobsNearShowBtn');
+      if (jobsNearShowBtn) jobsNearShowBtn.addEventListener('click', showJobsNearDriver);
       setupZoneTool();
       setupSidebarZone();
     });
+  }
+
+  function pollDrivers() {
+    get('/api/drivers').then(function (data) {
+      drivers = data || [];
+      renderDriverList();
+      updateDriverMarkers();
+    }).catch(function () {});
+    get('/api/jobs').then(function (data) {
+      jobs = data || [];
+      renderUnassignedJobs();
+    }).catch(function () {});
+    get('/api/permit-candidates').then(function (data) {
+      permitCandidates = data || [];
+      renderPermitCandidates();
+    }).catch(function () {});
+    renderJobsNearDriverSelect();
   }
 
   function routesSignature(data) {
@@ -785,4 +1567,5 @@
   }
 
   setInterval(poll, POLL_INTERVAL_MS);
+  setInterval(pollDrivers, DRIVER_POLL_MS);
 })();

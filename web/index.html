@@ -89,6 +89,64 @@
         </div>
       </div>
     </main>
+    <aside id="rightSidebar" class="right-sidebar" aria-label="Drivers and jobs">
+      <header class="right-sidebar-header">
+        <h2>Dispatch</h2>
+        <details class="dispatch-how-to" style="margin-top:0.5rem; font-size:0.75rem; color:var(--text-muted);">
+          <summary style="cursor:pointer;">How to use</summary>
+          <ol style="margin:0.35rem 0 0 1rem; padding:0; list-style:decimal;">
+            <li>Upload document (PDF/image)</li>
+            <li>Review permit → Approve or Reject</li>
+            <li>Create job from approved permit</li>
+            <li>Assign a driver from Unassigned jobs</li>
+          </ol>
+        </details>
+      </header>
+      <section class="right-sidebar-section" aria-label="Incoming permits">
+        <h3 class="right-sidebar-section-title">Incoming permits</h3>
+        <button type="button" id="uploadPermitBtn" class="job-card-assign-btn" style="margin-bottom:0.35rem;">Upload document</button>
+        <input type="file" id="uploadPermitInput" accept=".pdf,.jpg,.jpeg,.png,.webp" style="display:none;">
+        <div id="permitCandidatesList" class="permit-candidates-list"></div>
+      </section>
+      <section class="right-sidebar-section" aria-label="Jobs near driver">
+        <h3 class="right-sidebar-section-title">Jobs near driver's next location</h3>
+        <div class="jobs-near-driver-controls">
+          <label>Driver <select id="jobsNearDriverSelect"><option value="">— Select driver —</option></select></label>
+          <label>Min mi <input type="number" id="jobsNearMinMi" value="150" min="0" style="width:4rem;"></label>
+          <label>Max mi <input type="number" id="jobsNearMaxMi" value="300" min="0" style="width:4rem;"></label>
+          <button type="button" id="jobsNearShowBtn" class="job-card-assign-btn">Show</button>
+        </div>
+        <div id="jobsNearList" class="jobs-near-list"></div>
+      </section>
+      <section class="right-sidebar-section" aria-label="Unassigned jobs">
+        <h3 class="right-sidebar-section-title">Unassigned jobs</h3>
+        <div id="unassignedJobsList" class="unassigned-jobs-list"></div>
+      </section>
+      <section class="right-sidebar-section" aria-label="Driver list">
+        <h3 class="right-sidebar-section-title">Drivers</h3>
+        <div id="driverList" class="driver-list"></div>
+      </section>
+      <section id="adminSection" class="right-sidebar-section admin-section" aria-label="Admin" style="display: none;">
+        <h3 class="right-sidebar-section-title">Admin</h3>
+        <div class="admin-tabs">
+          <button type="button" class="admin-tab active" data-tab="users">Users</button>
+          <button type="button" class="admin-tab" data-tab="state-permissions">State permissions</button>
+          <button type="button" class="admin-tab" data-tab="config">Settings</button>
+        </div>
+        <div id="adminUsersPanel" class="admin-panel">
+          <div id="adminUsersList" class="admin-users-list"></div>
+        </div>
+        <div id="adminStatePanel" class="admin-panel" style="display: none;">
+          <label>Driver <select id="adminDriverSelect"><option value="">— Select driver —</option></select></label>
+          <div id="adminStatePermsList" class="admin-state-perms-list"></div>
+          <button type="button" id="adminStatePermsSave" class="job-card-assign-btn">Save state permissions</button>
+        </div>
+        <div id="adminConfigPanel" class="admin-panel" style="display: none;">
+          <div id="adminConfigList" class="admin-config-list"></div>
+          <button type="button" id="adminConfigSave" class="job-card-assign-btn">Save settings</button>
+        </div>
+      </section>
+    </aside>
   </div>
   <script src="js/config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>

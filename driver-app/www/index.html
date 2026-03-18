@@ -30,7 +30,7 @@
     </div>
     <div class="card">
       <h2 style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">Permits</h2>
-      <p class="placeholder">Permit documents for your current job will appear here.</p>
+      <p class="placeholder">Permit documents for your assignment (Phase 5).</p>
     </div>
     <div class="card">
       <h2 style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">Availability</h2>
@@ -51,7 +51,7 @@
     (function() {
       window.GeomapperAuth.init().then(function(hasAuth) {
         if (!hasAuth) {
-          window.location.href = '/login.html';
+          window.location.href = 'login.html';
           return;
         }
         window.GeomapperAuth.guardPage(false, function() {
@@ -81,10 +81,10 @@
         if (window.DriverPortal && window.DriverPortal.stop) window.DriverPortal.stop();
         if (window.GeomapperAuth.supabase) {
           window.GeomapperAuth.supabase.auth.signOut().then(function() {
-            window.location.href = '/login.html';
+            window.location.href = 'login.html';
           });
         } else {
-          window.location.href = '/login.html';
+          window.location.href = 'login.html';
         }
       });
     })();

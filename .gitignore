@@ -2,6 +2,8 @@ config.json
 web/app-config.json
 data/
 node_modules/
+driver-app/node_modules/
+.pytest_cache/
 __pycache__/
 *.pyc
 .env

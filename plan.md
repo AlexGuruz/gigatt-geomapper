@@ -2,10 +2,12 @@
 
 **Purpose:** Step-by-step plan for the role-based, authenticated driver-tracking + permit-aware dispatch platform. Follow this document in order to avoid mistakes. Do not skip sections or invert the build order unless explicitly noted.
 
-**Document version:** 2.1  
-**Last updated:** 2026-03-14
+**Document version:** 2.2  
+**Last updated:** 2026-03-15
 
 Related docs (setup, deploy, baseline, migration, driver app) are indexed in [README.md](README.md#documentation-index).
+
+**As built (Phases 1–7):** Backend: `server.py` + Supabase; local file storage for ingestion (`data/uploads/`). APIs: auth/config, jobs (CRUD, assign, candidate-drivers, list with optional `near_lat`/`near_lng`/`min_mi`/`max_mi`), drivers, ingestion-documents (upload, parse), permit-candidates (list, PATCH, approve, reject, create-job), driver-locations batch (JWT optional). Frontend: dispatch UI (incoming permits, jobs near driver, unassigned jobs, drivers, assign flow); driver portal (assignment card, location batching, offline queue); login/role routing. DB: profiles, driver_profiles, jobs (with origin_lat/origin_lng per migration 003), job_route_states, driver_state_permissions, location_history, driver_last_location, ingestion_documents, permit_candidates, dispatch_config. Assignment is implemented via `jobs.assigned_driver_id` (no separate driver_assignments table). Unbuilt or partial: admin UI, driver_availability calendar API, full realtime.
 
 ---
 
@@ -30,8 +32,15 @@ Use this section as a quick map before reading the full plan:
 
 ### Wiring Graph
 
+*Built through Phase 7: Driver app, Dispatch UI, Backend API, Auth, DB, local uploads, ingestion pipeline, jobs (including jobs-near-driver filter), Admin UI and API. Availability/calendar and existing market flow remain unbuilt or partial.*
+
+*In diagrams below: **built** = green fill; **unbuilt** = gray fill.*
+
 ```mermaid
 flowchart LR
+    classDef built fill:#2d5a27,stroke:#6bcf7c,color:#e8e8e8
+    classDef unbuilt fill:#4a4a4a,stroke:#888,color:#ccc
+
     U[User] --> Driver[Driver app / portal]
     U --> Dispatch[Dispatcher Geomapper UI]
     U --> Admin[Admin controls]
@@ -48,12 +57,12 @@ flowchart LR
 
     API --> Auth[Supabase Auth]
     API --> DB[(Postgres / Supabase DB)]
-    API --> Store[File storage]
+    API --> Store["File storage (data/uploads, built)"]
 
     Driver --> Batch[Location batch upload]
     Batch --> API
 
-    Dispatch --> Assign[Assignment + dispatch actions]
+    Dispatch --> Assign["Assignment + permit review + jobs near driver (built)"]
     Assign --> API
 
     API --> Ingest[Ingestion pipeline]
@@ -68,6 +77,9 @@ flowchart LR
     Market --> Dispatch
     Drivers --> Dispatch
     Job --> Dispatch
+
+    class U,Driver,Dispatch,Admin,API,Auth,DB,Store,Batch,Assign,Ingest,InDoc,Candidate,Review,Job,Drivers built
+    class Market unbuilt
 ```
 
 ### Systems Graph
@@ -213,8 +225,13 @@ sequenceDiagram
 
 ### Frontend Surface Data-Source Graph
 
+*Built: DriverPortal → batch location + Supabase (profile, assigned job). DispatchUI → GET/POST/PATCH jobs, candidate-drivers, assign, GET jobs?near_lat/near_lng/min_mi/max_mi, ingestion-documents upload/parse, permit-candidates list/PATCH/approve/reject/create-job, drivers, LegacyFeed. Login → Auth. AdminUI and AdminAPI (users, roles, state permissions, config) are built. Availability calendar and market flow remain unbuilt or partial.*
+
 ```mermaid
 flowchart LR
+    classDef built fill:#2d5a27,stroke:#6bcf7c,color:#e8e8e8
+    classDef unbuilt fill:#4a4a4a,stroke:#888,color:#ccc
+
     subgraph Surfaces["Frontend surfaces"]
         Login[Login / auth shell]
         DriverPortal[Driver portal]
@@ -237,6 +254,8 @@ flowchart LR
     DispatchUI --> IntakeAPI
     DispatchUI --> LegacyFeed
     AdminUI --> AdminAPI
+
+    class Login,DriverPortal,DispatchUI,AdminUI,AdminAPI,AuthAPI,DriverAPI,DispatchAPI,IntakeAPI,LegacyFeed built
 ```
 
 ### Current Vs Target Architecture Graph
@@ -388,6 +407,8 @@ flowchart LR
 
 ### Core Entity Relationship Graph
 
+*As built: Assignment is implemented via jobs.assigned_driver_id (no separate driver_assignments table). JOBS include origin_lat, origin_lng (migration 003). DRIVER_LOCATIONS realized as location_history + driver_last_location. DRIVER_AVAILABILITY and DRIVER_ASSIGNMENTS (logical) remain for future or reference.*
+
 ```mermaid
 erDiagram
     USER_PROFILES ||--o{ DRIVER_PROFILES : has
@@ -441,6 +462,8 @@ erDiagram
       uuid permit_candidate_id
       uuid permit_id
       text status
+      numeric origin_lat
+      numeric origin_lng
     }
     DRIVER_ASSIGNMENTS {
       uuid id
@@ -452,6 +475,11 @@ erDiagram
       uuid job_id
       text state_code
     }
+
+    classDef built fill:#2d5a27,stroke:#6bcf7c,color:#e8e8e8
+    classDef unbuilt fill:#4a4a4a,stroke:#888,color:#ccc
+    class USER_PROFILES,DRIVER_PROFILES,INGESTION_DOCUMENTS,PERMIT_CANDIDATES,PERMITS,JOBS,JOB_ROUTE_STATES,DRIVER_LOCATIONS built
+    class DRIVER_AVAILABILITY,DRIVER_ASSIGNMENTS unbuilt
 ```
 
 ### Data Ownership Graph
@@ -556,19 +584,27 @@ stateDiagram-v2
 
 ### API To Entity Effect Graph
 
+*Built: Upload, Parse, CreateJob, Assign (POST /api/jobs/:id/assign → jobs + driver_profiles; no separate driver_assignments table), BatchLoc, Auth. Permit review implemented as PATCH /api/permit-candidates/:id + POST .../approve + POST .../reject. GET /api/jobs with near_lat, near_lng, min_mi, max_mi reads jobs (origin_lat/lng). Availability and some admin endpoints remain unbuilt.*
+
 ```mermaid
 flowchart TD
+    classDef built fill:#2d5a27,stroke:#6bcf7c,color:#e8e8e8
+    classDef unbuilt fill:#4a4a4a,stroke:#888,color:#ccc
+
     Upload[POST /api/ingestion-documents] --> IngestionDocs[ingestion_documents]
     Parse[POST /api/ingestion-documents/:id/parse] --> PermitCandidates[permit_candidates]
-    Review[POST /api/permit-candidates/:id/review] --> PermitCandidates
+    ApproveReject["PATCH /api/permit-candidates/:id, POST .../approve, .../reject (built)"] --> PermitCandidates
     CreateJob[POST /api/permit-candidates/:id/create-job] --> Jobs[jobs]
-    Assign[POST assignment endpoint] --> Assignments[driver_assignments]
-    Assign --> Jobs
+    Assign[POST /api/jobs/:id/assign] --> Jobs
     Assign --> DriverProfiles[driver_profiles]
+    JobsNear[GET /api/jobs?near_lat/near_lng/min_mi/max_mi] --> Jobs
     BatchLoc[POST /api/driver-locations/batch] --> LocationHistory[location_history]
     BatchLoc --> LastLocation[driver_last_location / last_seen]
     Availability[PUT /api/drivers/:id/availability] --> DriverAvailability[driver_availability]
     AuthEndpoints[login / session / profile] --> UserProfiles[user_profiles / roles]
+
+    class Upload,Parse,ApproveReject,CreateJob,Assign,JobsNear,BatchLoc,AuthEndpoints,IngestionDocs,PermitCandidates,Jobs,DriverProfiles,LocationHistory,LastLocation,UserProfiles built
+    class Availability,DriverAvailability unbuilt
 ```
 
 ### Exact SQL-Level Relation Graph
@@ -1518,19 +1554,19 @@ Do this **before** Phase 1. It creates a baseline so Cursor (or any implementer)
 
 | Step | Action | Done |
 |------|--------|------|
-| 0.1 | **Document current working endpoints.** List every API or server route the app uses (e.g. GET /api/routes, GET /api/drivers, POST /api/poll, PATCH /api/routes/:id, static files). | ☐ |
-| 0.2 | **Document current map behaviors.** List: how opportunity markers are created, how heatmap is built, how zone circle works, how selected-route focus works (zoom, highlight, polyline). | ☐ |
-| 0.3 | **Document current left sidebar behaviors.** List: filters (time, route type, map locations), route cards source, zone toggle, refresh button, poll status, route focus summary. | ☐ |
-| 0.4 | **Create a regression checklist.** A short list of “after any change, verify: …” (e.g. left sidebar still shows routes, zone filter still works, refresh still triggers poll, map still centers on selected route). | ☐ |
-| 0.5 | **Snapshot current routes.json / drivers.json expectations.** Document schema (or example) and which code reads/writes them. Note poller output shape and server read paths. | ☐ |
-| 0.6 | **Identify all current focus behavior in app.js (or equivalent).** Document how “selected route” and “route focus summary” are set and cleared. Define what “unchanged” means for load board / text / email route ingestion (no change to poller contract, no change to route card data shape for left sidebar). | ☐ |
+| 0.1 | **Document current working endpoints.** List every API or server route the app uses (e.g. GET /api/routes, GET /api/drivers, POST /api/poll, PATCH /api/routes/:id, static files). | ☑ |
+| 0.2 | **Document current map behaviors.** List: how opportunity markers are created, how heatmap is built, how zone circle works, how selected-route focus works (zoom, highlight, polyline). | ☑ |
+| 0.3 | **Document current left sidebar behaviors.** List: filters (time, route type, map locations), route cards source, zone toggle, refresh button, poll status, route focus summary. | ☑ |
+| 0.4 | **Create a regression checklist.** A short list of “after any change, verify: …” (e.g. left sidebar still shows routes, zone filter still works, refresh still triggers poll, map still centers on selected route). | ☑ |
+| 0.5 | **Snapshot current routes.json / drivers.json expectations.** Document schema (or example) and which code reads/writes them. Note poller output shape and server read paths. | ☑ |
+| 0.6 | **Identify all current focus behavior in app.js (or equivalent).** Document how “selected route” and “route focus summary” are set and cleared. Define what “unchanged” means for load board / text / email route ingestion (no change to poller contract, no change to route card data shape for left sidebar). | ☑ |
 
 **Why:** If implementation starts without this baseline, “preserve existing behavior” is ambiguous and the current app can be damaged by well-meaning edits.
 
 **Phase 0 acceptance criteria**
 
-- [ ] Endpoints, map behaviors, left sidebar, regression checklist, routes.json snapshot, focus behavior all documented.
-- [ ] Baseline sufficient for Cursor to know what "unchanged" means.
+- [x] Endpoints, map behaviors, left sidebar, regression checklist, routes.json snapshot, focus behavior all documented (see [BASELINE.md](BASELINE.md)).
+- [x] Baseline sufficient for Cursor to know what "unchanged" means.
 
 ### Phase 1 — Foundation (backend + auth)
 
@@ -1620,12 +1656,12 @@ Follow the **exact phase order** in Section 10.12. Backend is multi-source docum
 
 | Step | Action | Done |
 |------|--------|------|
-| 5.1 | Implement **ingestion_documents** intake: POST /api/ingestion-documents (file upload, source_type: email_pdf, text_screenshot, email_screenshot, manual_upload). Store file; create ingestion_document. | ☐ |
-| 5.2 | Implement parse: POST /api/ingestion-documents/:id/parse. Extract text (PDF) or OCR (image); create/update **permit_candidate**; set processing_status and review_status (needs_review / insufficient_data). Support at least PDF and one image type. | ☐ |
-| 5.3 | GET ingestion-documents and permit-candidates (list + filter by status). Dispatcher sees pending, needs review, approved. | ☐ |
-| 5.4 | Review UI: show extracted fields for a permit_candidate; allow edit; approve or reject. No job created without review. | ☐ |
-| 5.5 | POST /api/permit-candidates/:id/create-job (or approve+create-job). Create **job** from approved candidate. Job appears in unassigned list. | ☐ |
-| 5.6 | Right sidebar “Unassigned jobs” (or “Incoming permits”) panel: job cards with Assign driver. Assign driver flow: select job → show drivers → assign → job and driver update; driver card and map update (reuse Phase 3). | ☐ |
+| 5.1 | Implement **ingestion_documents** intake: POST /api/ingestion-documents (file upload, source_type: email_pdf, text_screenshot, email_screenshot, manual_upload). Store file; create ingestion_document. | ☑ |
+| 5.2 | Implement parse: POST /api/ingestion-documents/:id/parse. Extract text (PDF) or OCR (image); create/update **permit_candidate**; set processing_status and review_status (needs_review / insufficient_data). Support at least PDF and one image type. | ☑ |
+| 5.3 | GET ingestion-documents and permit-candidates (list + filter by status). Dispatcher sees pending, needs review, approved. | ☑ |
+| 5.4 | Review UI: show extracted fields for a permit_candidate; allow edit; approve or reject. No job created without review. | ☑ |
+| 5.5 | POST /api/permit-candidates/:id/create-job (or approve+create-job). Create **job** from approved candidate. Job appears in unassigned list. | ☑ |
+| 5.6 | Right sidebar “Unassigned jobs” (or “Incoming permits”) panel: job cards with Assign driver. Assign driver flow: select job → show drivers → assign → job and driver update; driver card and map update (reuse Phase 3). | ☑ |
 
 **Phase 5 acceptance criteria**
 
@@ -1654,15 +1690,15 @@ Follow the **exact phase order** in Section 10.12. Backend is multi-source docum
 
 | Step | Action | Done |
 |------|--------|------|
-| 7.1 | Filter “available” jobs or opportunity routes by distance (e.g. 150–300 mi) from driver’s projected_available_location. | ☐ |
-| 7.2 | Expose in Geomapper (e.g. “Routes near Driver X’s next free location”). | ☐ |
+| 7.1 | Filter “available” jobs or opportunity routes by distance (e.g. 150–300 mi) from driver’s projected_available_location. | ☑ |
+| 7.2 | Expose in Geomapper (e.g. “Routes near Driver X’s next free location”). | ☑ |
 
 **Phase 7 acceptance criteria**
 
-- [ ] Jobs/opportunity routes filterable by distance from driver's projected_available_location (e.g. 150-300 mi).
-- [ ] "Routes near Driver X's next free location" exposed in Geomapper.
+- [x] Jobs/opportunity routes filterable by distance from driver's projected_available_location (e.g. 150-300 mi).
+- [x] "Routes near Driver X's next free location" exposed in Geomapper (right sidebar: "Jobs near driver's next location" with driver select, min/max mi, Show).
 
-
+**Status & next steps (after Phase 7):** Phases 1–5 and 7 are implemented. Phase 6 (rollout: TestFlight, test drivers, offline/idempotency verification) remains operational. Unbuilt per plan: **admin UI**, **driver_availability calendar API**, **full realtime**. Next: complete Phase 6 verification and/or start driver availability API or admin UI (Section 15 / plan "unbuilt").
 
 ---
 

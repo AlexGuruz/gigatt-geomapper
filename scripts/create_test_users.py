@@ -29,7 +29,7 @@ URL = os.environ.get("SUPABASE_URL", "").strip()
 KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
 
 TEST_USERS = [
-    {"email": "admin@test.gigatt.com", "password": "WhatADay!", "role": "dispatcher", "name": "Admin"},
+    {"email": "admin@test.gigatt.com", "password": "WhatADay!", "role": "admin", "name": "Admin"},
     {"email": "dispatcher@test.gigatt.com", "password": "Test123!@#", "role": "dispatcher", "name": "Test Dispatcher"},
     {"email": "driver@test.gigatt.com", "password": "Test123!@#", "role": "driver", "name": "Test Driver"},
 ]
@@ -103,10 +103,10 @@ def _update_profile_and_driver(client, user_id, email, role, name):
     except Exception as e:
         print(f"    profiles update: {e}")
 
-    if role == "dispatcher":
+    if role in ("dispatcher", "admin"):
         try:
             client.table("dispatcher_profiles").upsert(
-                {"user_id": user_id, "name": name or "Dispatcher"},
+                {"user_id": user_id, "name": name or ("Admin" if role == "admin" else "Dispatcher")},
                 on_conflict="user_id",
             ).execute()
         except Exception as e:
