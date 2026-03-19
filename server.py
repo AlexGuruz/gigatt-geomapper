@@ -872,7 +872,9 @@ class Handler(BaseHTTPRequestHandler):
         # Phase 5: POST /api/permit-candidates/:id/create-job
         if re.match(r"^/api/permit-candidates/[^/]+/create-job$", path):
             parts = path.split("/")
-            cand_id = parts[-2] if len(parts) >= 6 else None
+            # '/api' + 'permit-candidates' + '<cand_id>' + 'create-job' -> 5 segments total
+            # e.g. ['', 'api', 'permit-candidates', '<cand_id>', 'create-job'].
+            cand_id = parts[-2] if len(parts) >= 5 else None
             if not cand_id:
                 self.send_error(404)
                 return

@@ -63,8 +63,13 @@ npx cap add android
 
 ### 4.2 Background location (native)
 
-- **iOS:** In Xcode, open `ios/App/App/Info.plist` and add **Location** usage description and, for background, add `location` to **UIBackgroundModes** (e.g. `<key>UIBackgroundModes</key><array><string>location</string></array>`). Install `@capacitor/geolocation` and use it from `driver-portal.js` when `Capacitor.isNativePlatform()` is true.
-- **Android:** In `android/app/src/main/AndroidManifest.xml` add `ACCESS_BACKGROUND_LOCATION` and any other location permissions you need. Use `@capacitor/geolocation` for foreground/background as per Capacitor docs.
+- **iOS:** In Xcode, open `ios/App/App/Info.plist` and add Location usage descriptions. For background tracking, add `location` to **UIBackgroundModes** (e.g. `<key>UIBackgroundModes</key><array><string>location</string></array>`). Use native geolocation (Capacitor Geolocation plugin) when `Capacitor.isNativePlatform()` is true.
+- **Android:** For background tracking you typically need:
+  - Manifest permissions (Fine/Coarse and Background)
+  - A **foreground service** strategy (Android is strict about background location). Plain web `navigator.geolocation` inside a WebView is not reliably “always on”.
+  - Use native geolocation in the driver app when running under Capacitor.
+
+**Important:** “Background” behavior varies by OS version, OEM battery optimizations, and user settings. For best reliability on Android, plan on a foreground-service based approach (and document it for store review).
 
 ### 4.3 Build and run
 

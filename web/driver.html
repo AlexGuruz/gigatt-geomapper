@@ -62,7 +62,8 @@
               if (session && window.DriverPortal) window.DriverPortal.init(session);
             });
           }
-          if (navigator.geolocation) {
+          // Avoid triggering the browser geolocation permission flow on native platforms.
+          if (navigator.geolocation && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) {
             navigator.geolocation.getCurrentPosition(
               function() {
                 var el = document.getElementById('locationStatus');

@@ -30,7 +30,7 @@
     </div>
     <div class="card">
       <h2 style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">Permits</h2>
-      <p class="placeholder">Permit documents for your assignment (Phase 5).</p>
+      <p class="placeholder">Permit documents for your current job will appear here.</p>
     </div>
     <div class="card">
       <h2 style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">Availability</h2>
@@ -62,7 +62,9 @@
               if (session && window.DriverPortal) window.DriverPortal.init(session);
             });
           }
-          if (navigator.geolocation) {
+          // Avoid triggering the browser geolocation permission flow on native platforms.
+          // The background-geolocation plugin handles permissions for Android.
+          if (navigator.geolocation && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) {
             navigator.geolocation.getCurrentPosition(
               function() {
                 var el = document.getElementById('locationStatus');

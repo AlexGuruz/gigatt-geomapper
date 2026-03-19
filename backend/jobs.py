@@ -6,6 +6,7 @@ Phase 7: list_jobs filter by distance from point (near_lat/lng or near_driver_id
 from datetime import datetime, timedelta, date, time as dt_time
 import json
 import math
+import uuid
 
 
 def haversine_mi(lat1, lng1, lat2, lng2):
@@ -184,20 +185,64 @@ def get_job(client, job_id):
     """Get single job by id. Returns dict or None. Ensures job_route_states populated from origin/destination."""
     if not client or not job_id:
         return None
+    sel_with_coords = (
+        "id, permit_id, permit_candidate_id, origin, destination, route_text, estimated_miles, estimated_duration, "
+        "origin_lat, origin_lng, escort_requirements, assigned_driver_id, status, scheduled_start, projected_completion, "
+        "projected_available_at, projected_available_location, created_at, updated_at"
+    )
+    sel_no_coords = (
+        "id, permit_id, permit_candidate_id, origin, destination, route_text, estimated_miles, estimated_duration, "
+        "escort_requirements, assigned_driver_id, status, scheduled_start, projected_completion, "
+        "projected_available_at, projected_available_location, created_at, updated_at"
+    )
+    job_id_str = str(job_id)
+
+    # Supabase schema uses UUID for jobs.id; coercing can help some clients, but if filtering still returns
+    # no rows, fall back to local matching against an unfiltered list (listing works reliably here).
+    job_id_for_filter = job_id
     try:
-        r = client.table("jobs").select(
-            "id, permit_id, permit_candidate_id, origin, destination, route_text, estimated_miles, estimated_duration, "
-            "origin_lat, origin_lng, escort_requirements, assigned_driver_id, status, scheduled_start, projected_completion, "
-            "projected_available_at, projected_available_location, created_at, updated_at"
-        ).eq("id", job_id).limit(1).execute()
+        if isinstance(job_id, str):
+            job_id_for_filter = uuid.UUID(job_id)
+    except Exception:
+        job_id_for_filter = job_id
+
+    job = None
+    sel_for_queries = sel_with_coords
+    try:
+        r = client.table("jobs").select(sel_with_coords).eq("id", job_id_for_filter).limit(1).execute()
         rows = (r.data or []) if hasattr(r, "data") else []
         job = rows[0] if rows else None
-        if job and (job.get("origin") or job.get("destination")):
-            from backend.route_states import ensure_job_route_states
-            ensure_job_route_states(client, job_id, job.get("origin"), job.get("destination"))
-        return job
     except Exception:
-        return None
+        # Likely missing origin_lat/origin_lng columns (or other schema mismatch). Retry without coords.
+        try:
+            sel_for_queries = sel_no_coords
+            r = client.table("jobs").select(sel_no_coords).eq("id", job_id_for_filter).limit(1).execute()
+            rows = (r.data or []) if hasattr(r, "data") else []
+            job = rows[0] if rows else None
+        except Exception:
+            job = None
+
+    if not job:
+        # Fallback: fetch recent jobs and match locally by id.
+        try:
+            r = client.table("jobs").select(sel_for_queries).order("created_at", desc=True).limit(500).execute()
+            rows = (r.data or []) if hasattr(r, "data") else []
+            for row in rows:
+                if str(row.get("id")) == job_id_str:
+                    job = row
+                    break
+        except Exception:
+            job = None
+
+    if job:
+        # Normalize coords fields when the DB doesn't have them.
+        job.setdefault("origin_lat", None)
+        job.setdefault("origin_lng", None)
+
+    if job and (job.get("origin") or job.get("destination")):
+        from backend.route_states import ensure_job_route_states
+        ensure_job_route_states(client, str(job_id), job.get("origin"), job.get("destination"))
+    return job
 
 
 def assign_driver(client, job_id, driver_id):

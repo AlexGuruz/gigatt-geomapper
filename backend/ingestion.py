@@ -271,4 +271,10 @@ def create_job_from_candidate(client, candidate_id):
     except Exception:
         pass
     from backend.jobs import get_job as _get_job
-    return _get_job(client, job["id"]), None
+    job_id = job.get("id") if isinstance(job, dict) else None
+    if not job_id:
+        # Should be rare, but avoid returning null when job insert succeeded.
+        return job, None
+    fetched = _get_job(client, job_id)
+    # If lookup fails (e.g. transient type/encoding mismatch), still return the job dict we just created.
+    return fetched or job, None

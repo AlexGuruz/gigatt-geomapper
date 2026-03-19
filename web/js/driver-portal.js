@@ -9,9 +9,52 @@
   var INTERVAL_MOVING_MS = 30000;
   var INTERVAL_STATIONARY_MS = 60000;
   var MIN_MOVEMENT_METERS = 15;
-  var lastLat = null, lastLng = null, lastSentAt = 0, watchId = null, flushTimer = null;
+  var lastLat = null, lastLng = null, lastSentAt = 0, lastFixAt = 0, lastUploadAt = 0;
+  var watchId = null, flushTimer = null;
+  var lastBatchResult = null;
   var driverProfile = null;
   var driverId = null;
+  var isMoving = true;
+  var usingNative = false;
+
+  function statusEl() {
+    return document.getElementById('locationStatus');
+  }
+
+  function fmtTime(ms) {
+    if (!ms) return '—';
+    var d = new Date(ms);
+    return isNaN(d.getTime()) ? '—' : d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function updateStatus(text) {
+    var el = statusEl();
+    if (!el) return;
+    el.textContent = text;
+  }
+
+  function updateStatusFromState() {
+    var q = getQueue();
+    var parts = [];
+    parts.push('Tracking: ' + (usingNative ? 'native' : 'web'));
+    parts.push('Queue: ' + q.length);
+    parts.push('Last fix: ' + fmtTime(lastFixAt));
+    parts.push('Last upload: ' + fmtTime(lastUploadAt));
+    if (lastBatchResult) parts.push(lastBatchResult);
+    updateStatus(parts.join(' · '));
+  }
+
+  function haversineMeters(lat1, lng1, lat2, lng2) {
+    function toRad(x) { return x * Math.PI / 180; }
+    var R = 6371000;
+    var dLat = toRad(lat2 - lat1);
+    var dLng = toRad(lng2 - lng1);
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
 
   function getQueue() {
     try {
@@ -43,6 +86,7 @@
       heading: heading != null ? heading : undefined
     });
     setQueue(q);
+    updateStatusFromState();
   }
 
   function sendBatch(events, token) {
@@ -65,8 +109,13 @@
     if (!q.length) return Promise.resolve();
     return sendBatch(q, token).then(function() {
       setQueue([]);
+      lastUploadAt = Date.now();
+      lastBatchResult = 'Upload: ok';
+      updateStatusFromState();
     }).catch(function() {
       // keep in queue for next reconnect
+      lastBatchResult = 'Upload: failed (queued)';
+      updateStatusFromState();
     });
   }
 
@@ -76,7 +125,7 @@
       flushTimer = null;
       if (navigator.onLine !== false && token) flushQueue(token);
       scheduleFlush(token);
-    }, INTERVAL_MOVING_MS);
+    }, isMoving ? INTERVAL_MOVING_MS : INTERVAL_STATIONARY_MS);
   }
 
   function onPosition(position, token) {
@@ -85,24 +134,89 @@
     var ts = position.timestamp ? new Date(position.timestamp) : new Date();
     var speed = position.coords.speed != null ? position.coords.speed * 3.6 : null;
     var heading = position.coords.heading;
+    lastFixAt = Date.now();
+    var moved = true;
+    if (lastLat != null && lastLng != null) {
+      try {
+        moved = haversineMeters(lastLat, lastLng, lat, lng) >= MIN_MOVEMENT_METERS;
+      } catch (e) {
+        moved = true;
+      }
+    }
+    isMoving = !!moved;
+    var now = Date.now();
+    var interval = isMoving ? INTERVAL_MOVING_MS : INTERVAL_STATIONARY_MS;
+    if (!moved && lastSentAt && (now - lastSentAt) < interval) {
+      updateStatusFromState();
+      return;
+    }
     pushToQueue(lat, lng, ts, speed, heading);
     lastLat = lat;
     lastLng = lng;
     lastSentAt = Date.now();
+    updateStatusFromState();
+  }
+
+  function getNativeGeolocation() {
+    try {
+      var cap = window.Capacitor;
+      if (!cap || !cap.isNativePlatform || !cap.isNativePlatform()) return null;
+      var plugins = cap.Plugins || {};
+      return plugins.Geolocation || null;
+    } catch (e) {
+      return null;
+    }
   }
 
   function startLocationTracking(profileId, token) {
     driverId = profileId;
-    if (!navigator.geolocation) {
-      console.warn('Geolocation not available');
-      return;
+    var nativeGeo = getNativeGeolocation();
+    if (nativeGeo) {
+      usingNative = true;
+      updateStatusFromState();
+      Promise.resolve()
+        .then(function() { return nativeGeo.checkPermissions ? nativeGeo.checkPermissions() : null; })
+        .then(function(p) {
+          if (nativeGeo.requestPermissions) return nativeGeo.requestPermissions();
+          return p;
+        })
+        .then(function() {
+          watchId = nativeGeo.watchPosition(
+            { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 },
+            function(pos, err) {
+              if (err) {
+                lastBatchResult = 'Fix: error ' + (err.code || '');
+                updateStatusFromState();
+                return;
+              }
+              if (pos) onPosition(pos, token);
+            }
+          );
+        })
+        .catch(function(e) {
+          console.warn('Native geolocation init failed:', e);
+          usingNative = false;
+          updateStatusFromState();
+        });
+    } else {
+      usingNative = false;
+      if (!navigator.geolocation) {
+        console.warn('Geolocation not available');
+        updateStatus('Location: unavailable');
+        return;
+      }
+      var options = { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 };
+      watchId = navigator.geolocation.watchPosition(
+        function(pos) { onPosition(pos, token); },
+        function(err) {
+          console.warn('Geolocation error:', err.code);
+          lastBatchResult = 'Fix: error ' + (err.code || '');
+          updateStatusFromState();
+        },
+        options
+      );
+      updateStatusFromState();
     }
-    var options = { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 };
-    watchId = navigator.geolocation.watchPosition(
-      function(pos) { onPosition(pos, token); },
-      function(err) { console.warn('Geolocation error:', err.code); },
-      options
-    );
     scheduleFlush(token);
     window.addEventListener('online', function() {
       if (token && driverId) flushQueue(token);
@@ -111,7 +225,14 @@
 
   function stopLocationTracking() {
     if (watchId != null) {
-      navigator.geolocation.clearWatch(watchId);
+      try {
+        var nativeGeo = getNativeGeolocation();
+        if (nativeGeo && nativeGeo.clearWatch) {
+          nativeGeo.clearWatch({ id: watchId });
+        } else if (navigator.geolocation && navigator.geolocation.clearWatch) {
+          navigator.geolocation.clearWatch(watchId);
+        }
+      } catch (e) {}
       watchId = null;
     }
     if (flushTimer) {
@@ -194,6 +315,7 @@
 
   window.DriverPortal = {
     init: function(session) {
+      updateStatusFromState();
       loadDriverData(session).then(function(profile) {
         if (profile && session && session.access_token) {
           startLocationTracking(profile.id, session.access_token);
